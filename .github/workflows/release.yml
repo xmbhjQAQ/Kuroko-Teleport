@@ -104,27 +104,35 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android SDK platform, build-tools, NDK & CMake
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+
+          SDKMANAGER="$(command -v sdkmanager || find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f 2>/dev/null | sort -V | tail -n 1 || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager not found under $SDK_ROOT"
+            exit 1
+          fi
+          echo "Using sdkmanager: $SDKMANAGER"
+
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" \
             "platforms;android-36" \
             "build-tools;36.0.0" \
             "ndk;27.2.12479018"
-          sdkmanager "cmake;3.31.6" || sdkmanager "cmake;3.22.1"
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "cmake;3.31.6" || "$SDKMANAGER" --sdk_root="$SDK_ROOT" "cmake;3.22.1"
 
-          NDK_DIR="$ANDROID_HOME/ndk/27.2.12479018"
+          NDK_DIR="$SDK_ROOT/ndk/27.2.12479018"
           if [ ! -d "$NDK_DIR" ]; then
-            NDK_DIR="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+            NDK_DIR="$(find "$SDK_ROOT/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
           fi
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
 
-          if ! find "$ANDROID_HOME/cmake" -name ninja -type f 2>/dev/null | grep -q . && ! command -v ninja >/dev/null 2>&1; then
+          if ! find "$SDK_ROOT/cmake" -name ninja -type f 2>/dev/null | grep -q . && ! command -v ninja >/dev/null 2>&1; then
             sudo apt-get update
             sudo apt-get install -y ninja-build
           fi
