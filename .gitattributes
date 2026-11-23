@@ -18,5 +18,6 @@ sepolicy.rule text eol=lf
 
 *.png binary
 *.jpg binary
+*.gif binary
 *.webp binary
 *.jar binary

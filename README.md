@@ -22,6 +22,27 @@
 
 ---
 
+## 界面预览
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/assets/preview-motion.jpg" width="250" alt="运动模拟主界面" /><br/>
+      <sub><strong>运动模拟 &amp; 轨迹绘制</strong></sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/assets/preview-routes.jpg" width="250" alt="场景路线方案库" /><br/>
+      <sub><strong>场景路线方案与导入导出</strong></sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/assets/demo-hud.gif" width="250" alt="后台悬浮窗实时演示" /><br/>
+      <sub><strong>后台悬浮窗实机演示（GIF）</strong></sub>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## 适用环境
 
 | 项目 | 要求 | 说明 |

@@ -22,6 +22,27 @@
 
 ---
 
+## Screenshots & Demo
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/assets/preview-motion.jpg" width="250" alt="Route Motion UI" /><br/>
+      <sub><strong>Route Motion &amp; Waypoints</strong></sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/assets/preview-routes.jpg" width="250" alt="Saved Route Presets" /><br/>
+      <sub><strong>Saved Route Presets &amp; Export</strong></sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/assets/demo-hud.gif" width="250" alt="Floating HUD Live Demo" /><br/>
+      <sub><strong>Floating HUD Live Demo (GIF)</strong></sub>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## Requirements
 
 | Component | Requirement | Notes |
