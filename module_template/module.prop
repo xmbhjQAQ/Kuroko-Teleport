@@ -1,0 +1,6 @@
+id=kuroko_teleport
+name=Kuroko Teleport
+version=v0.6.1
+versionCode=10
+author=Kuroko Teleport
+description=Per-app system-side GPS, pedometer & IMU simulation engine for Android (zero target app injection)

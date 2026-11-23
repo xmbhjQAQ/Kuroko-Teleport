@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Map layers -->
+    <string name="map_layer_amap_sat">AMap Satellite + Roads</string>
+    <string name="map_layer_amap_sat_short">AMap Sat</string>
+    <string name="map_layer_esri_sat">Esri HD Satellite</string>
+    <string name="map_layer_esri_sat_short">Esri Sat</string>
+    <string name="map_layer_openfreemap">OpenFreeMap Vector</string>
+    <string name="map_layer_openfreemap_short">Vector</string>
+    <string name="map_layer_tianditu_sat">Tianditu Satellite + Labels</string>
+    <string name="map_layer_tianditu_sat_short">Tianditu</string>
+
+    <!-- Geocoder -->
+    <string name="geo_error_search_failed">Place search failed. Please check your network connection.</string>
+    <string name="geo_provider_photon">Photon</string>
+    <string name="geo_provider_osm">OSM</string>
+    <string name="geo_provider_amap">AMap → WGS84</string>
+    <string name="geo_provider_tianditu">Tianditu</string>
+
+    <!-- Built-in speed presets -->
+    <string name="preset_walk">Walk</string>
+    <string name="preset_jog">Jog</string>
+    <string name="preset_run">Run</string>
+    <string name="preset_sprint">Sprint</string>
+
+    <!-- Route store & sheet -->
+    <string name="route_default_crosshair_label">Current crosshair position</string>
+    <string name="route_import_err_empty">Clipboard content is empty</string>
+    <string name="route_import_err_no_routes">Missing \"routes\" array field</string>
+    <string name="route_import_err_invalid">No valid route data found</string>
+    <string name="route_unnamed">Unnamed Route</string>
+    <string name="route_sheet_title">Route Profiles (%1$d)</string>
+    <string name="route_export_empty">No route profiles to export</string>
+    <string name="route_clipboard_label">Kuroko Teleport Routes</string>
+    <string name="route_export_copied">Copied %1$d route(s) JSON to clipboard</string>
+    <string name="route_clipboard_write_failed">Failed to write to clipboard. Check clipboard permissions.</string>
+    <string name="route_action_export">Export</string>
+    <string name="route_action_import">Import</string>
+    <string name="route_action_cancel">Cancel</string>
+    <string name="route_laps_infinite">∞ laps</string>
+    <string name="route_laps_count">%1$d laps</string>
+    <string name="route_carry_pocket">Pocket</string>
+    <string name="route_carry_hand">Hand</string>
+    <string name="route_summary_line">%1$s · %2$s · %3$s ±%4$d%% · %5$s · ±%6$sm</string>
+    <string name="route_name_label">Profile name (route + full motion params)</string>
+    <string name="route_name_placeholder">e.g. East Track 400m · 8-Lap Jog</string>
+    <string name="route_btn_update">Update Profile</string>
+    <string name="route_default_name_fmt">Route %1$s</string>
+    <string name="route_btn_save_as_new">Save as New</string>
+    <string name="route_btn_save_new">Save Profile</string>
+    <string name="route_need_two_points_hint">Place at least 2 waypoints in Motion mode to save the route along with pace, variation, carry posture, and GPS jitter as a profile.</string>
+    <string name="route_empty_list">No saved route profiles yet</string>
+    <string name="route_cd_closed_loop">Closed loop</string>
+    <string name="route_cd_delete">Delete profile</string>
+    <string name="route_card_meta_hint">%1$d pts · Tap card to load full profile</string>
+    <string name="route_btn_load_path_only">Path Only</string>
+    <string name="route_import_dialog_title">Import Route Profiles (JSON)</string>
+    <string name="route_import_dialog_hint">Paste the route JSON copied via Export. Profiles will be merged into your library.</string>
+    <string name="route_import_json_label">JSON content</string>
+    <string name="route_import_success">Imported %1$d route profile(s)</string>
+    <string name="route_import_failed">Import failed: %1$s</string>
+
+    <!-- Point store & sheet -->
+    <string name="point_import_err_empty">Clipboard content is empty</string>
+    <string name="point_import_err_no_points">Missing \"points\" array field</string>
+    <string name="point_import_err_invalid">No valid point data found</string>
+    <string name="point_unnamed">Unnamed Point</string>
+    <string name="point_sheet_title">Saved Points (%1$d)</string>
+    <string name="point_export_empty">No saved points to export</string>
+    <string name="point_clipboard_label">Kuroko Teleport Points</string>
+    <string name="point_export_copied">Copied %1$d point(s) JSON to clipboard</string>
+    <string name="point_clipboard_write_failed">Failed to write to clipboard. Check clipboard permissions.</string>
+    <string name="point_action_export">Export</string>
+    <string name="point_action_import">Import</string>
+    <string name="point_action_cancel">Cancel</string>
+    <string name="point_current_coord_fmt">WGS-84  %1$s, %2$s · Jitter ±%3$sm</string>
+    <string name="point_name_label">Point name (coords + static jitter)</string>
+    <string name="point_name_placeholder">e.g. Office Gate / Library</string>
+    <string name="point_btn_update">Update Point</string>
+    <string name="point_default_name_fmt">Point %1$s</string>
+    <string name="point_btn_save_as_new">Save as New</string>
+    <string name="point_btn_save_new">Save Point</string>
+    <string name="point_empty_list">No saved points yet. Pan the map to aim the crosshair at your target location, enter a name above, and tap Save.</string>
+    <string name="point_cd_delete">Delete point</string>
+    <string name="point_import_dialog_title">Import Saved Points (JSON)</string>
+    <string name="point_import_dialog_hint">Paste the point JSON copied via Export. Points will be merged into your library.</string>
+    <string name="point_import_json_label">JSON content</string>
+    <string name="point_import_success">Imported %1$d saved point(s)</string>
+    <string name="point_import_failed">Import failed: %1$s</string>
+
+    <!-- Target app selector sheet -->
+    <string name="target_sheet_title">Target Apps (%1$d/%2$d)</string>
+    <string name="target_btn_apply">Apply</string>
+    <string name="target_zero_inject_banner">Zero target app injection: enable only System Framework and Phone Services in LSPosed. Per-UID isolation policies are dispatched here.</string>
+    <string name="target_cd_clear">Clear</string>
+    <string name="target_search_placeholder">Search app name / package / UID</string>
+    <string name="target_toggle_system_apps">System</string>
+    <string name="target_policy_strict">Strict (No Wi-Fi/Cell)</string>
+    <string name="target_policy_local_outdoor">Outdoor (Keep Cell)</string>
+
+    <!-- Help guide sheet -->
+    <string name="help_title">Kuroko Teleport Guide &amp; Parameter Reference</string>
+    <string name="help_subtitle">System-side per-UID simulation · Zero target app injection</string>
+
+    <string name="help_sec1_title">1. Quick Start in 3 Steps</string>
+    <string name="help_sec1_b1_head">Step 1 · Select Target Apps</string>
+    <string name="help_sec1_b1_body">Tap \"Target Apps\" and select apps to simulate (isolated per UID globally; switching routes or saved points does not alter your selected apps).</string>
+    <string name="help_sec1_b2_head">Step 2 · Pick Mode &amp; Place Points</string>
+    <string name="help_sec1_b2_body">Switch between \"Static\" and \"Motion\" in the bottom panel. Pan the map to align the center crosshair, then pick a point or tap \"+ Point\". Drag the panel handle up or down to smoothly expand or collapse.</string>
+    <string name="help_sec1_b3_head">Step 3 · Start Simulation</string>
+    <string name="help_sec1_b3_body">Tap the green \"Start Hold\" or \"Start Motion\" button to activate immediately. Collapsing the bottom panel opens %1$d%%+ unobstructed map view while quick buttons track along smoothly.</string>
+
+    <string name="help_sec2_title">2. Profiles, Auto-Save Draft &amp; Long-Press Presets</string>
+    <string name="help_sec2_b1_head">Auto-Restore Workspace (No Lost Drafts)</string>
+    <string name="help_sec2_b1_body">Your active route draft, static pin, separate static/motion GPS jitter, pace, variation, carry posture, and map camera are automatically saved and restored on relaunch.</string>
+    <string name="help_sec2_b2_head">Route Profiles (Full Profile / Path Only)</string>
+    <string name="help_sec2_b2_body">Saving a route bundles its waypoints, lap limit, speed, pace variation, posture, and jitter. Tap a card to load the full profile, or tap \"Path Only\" to swap only the track while keeping your current pace. Active profiles support Update, Save as New, and one-tap clipboard JSON export/import.</string>
+    <string name="help_sec2_b3_head">Custom Speed Presets (Long-Press to Save)</string>
+    <string name="help_sec2_b3_body">After tuning your preferred speed, pace variation, and posture in Motion mode, long-press any preset chip (Walk / Jog / Run / Sprint) to overwrite it. Restore defaults anytime in Settings.</string>
+
+    <string name="help_sec3_title">3. Key Parameters Explained</string>
+    <string name="help_sec3_b1_head">Hand Swing vs Pocket</string>
+    <string name="help_sec3_b1_body">Controls synthesized phone pitch and swing amplitude. \"Hand Swing\" models holding the screen tilted ~30° upward with wider arm swing; \"Pocket\" models an ~80° upright phone in a pocket or waist pack with tighter rotation so accelerometer and gyroscope waveforms match real carry habits.</string>
+    <string name="help_sec3_b2_head">Pace Variation (%1$d%%–%2$d%% recommended)</string>
+    <string name="help_sec3_b2_body">Real runners never move at a robotic constant speed. Setting ±%1$d%% introduces dual-timescale natural pace drift plus slight corner slowdowns, with the live fastest–slowest pace range shown on the panel.</string>
+    <string name="help_sec3_b3_head">GPS Jitter (Default 2.0m)</string>
+    <string name="help_sec3_b3_body">Simulates colored slow drift of real outdoor GNSS signals so recorded tracks avoid unnatural ruler-straight lines.</string>
+    <string name="help_sec3_b4_head">Strict vs Outdoor Policy</string>
+    <string name="help_sec3_b4_body">\"Strict\" hides both real Wi-Fi scan lists and cell towers—ideal for cross-city spoofing. \"Outdoor\" hides indoor Wi-Fi while preserving real local cell towers to reduce no-cell risk flags in certain apps.</string>
+
+    <string name="help_sec4_title">4. Top Hardware Status LED Legend</string>
+    <string name="help_led_engine_tag">ENG ●</string>
+    <string name="help_led_engine_desc">kuroko_daemon background service is connected via local auth (127.0.0.1:28765)</string>
+    <string name="help_led_loc_desc">system_server shared-memory link ready (Location / GNSS / NMEA / Wi-Fi active)</string>
+    <string name="help_led_phone_desc">com.android.phone link ready (Strict cell-tower hiding active)</string>
+    <string name="help_led_sensor_desc">Native pedometer &amp; 5-axis IMU sensor hook ready (steps / cadence / accel / gyro / orientation; if S× appears, check KSU module v%1$s and Zygisk Next)</string>
+
+    <string name="help_sec5_title">5. Safe Finishing &amp; LSPosed Scope Rules</string>
+    <string name="help_sec5_b1_head">Auto-Hold on Completion (No Instant Teleport)</string>
+    <string name="help_sec5_b1_body">When your target laps or distance is reached, the engine switches to \"Done · Holding\" at the finish point instead of shutting off abruptly. Switch back to your fitness app, finish and upload the workout first, then return to Kuroko Teleport and tap \"Stop\".</string>
+    <string name="help_sec5_b2_head">LSPosed Scope Rule</string>
+    <string name="help_sec5_b2_body">In LSPosed Manager, enable ONLY \"System Framework (android)\" and \"Phone Services (com.android.phone)\". Never enable any target app! All per-UID isolation happens seamlessly at the system layer.</string>
+
+    <string name="help_sec6_title">6. Floating HUD &amp; Notification Controls</string>
+    <string name="help_sec6_b1_head">Smart Auto-Hide (Appears in Background)</string>
+    <string name="help_sec6_b1_body">Tap the HUD icon in the top bar or enable \"Floating HUD\" in Settings and grant \"Display over other apps\". With \"Auto-Hide Inside Kuroko Teleport\" enabled by default, the capsule appears automatically when switching to target apps and hides when returning to Kuroko Teleport so the map stays unobstructed.</string>
+    <string name="help_sec6_b2_head">Edge-Docked Capsule &amp; Drag-to-Close</string>
+    <string name="help_sec6_b2_body">The capsule displays a 6dp status LED with core distance/pace metrics and softly dims after 4 seconds of inactivity. Release to snap to the left/right screen edge, or drag into the bottom-center \"× Drag here to close\" hotzone to dismiss.</string>
+    <string name="help_sec6_b3_head">Expanded Mini Console (252dp Quick Controls)</string>
+    <string name="help_sec6_b3_body">Tap the capsule to expand the mini console in place: pause/resume/stop, nudge speed by ±0.3 m/s, apply any of the 4 speed presets, toggle Hand/Pocket posture, or reset steps with two-tap confirmation. Drag the top bar to reposition freely.</string>
+    <string name="help_sec6_b4_head">Notification Controls &amp; Screen-Capture Stealth</string>
+    <string name="help_sec6_b4_body">While active, a low-priority notification offers quick Pause / Resume / Stop / Close HUD buttons. Enable \"Hide from Screenshots/Recording (FLAG_SECURE)\" in Settings anytime. Set Kuroko Teleport battery optimization to \"Unrestricted\" in system battery settings to prevent background termination.</string>
+
+    <!-- Floating HUD -->
+    <string name="hud_status_offline">Offline</string>
+    <string name="hud_status_done">Done</string>
+    <string name="hud_status_moving">Moving</string>
+    <string name="hud_status_holding">Hold</string>
+    <string name="hud_status_paused">Paused</string>
+    <string name="hud_status_idle">Idle</string>
+    <string name="hud_capsule_holding">Hold</string>
+    <string name="hud_cd_open_main">Open main app</string>
+    <string name="hud_cd_collapse">Collapse to capsule</string>
+    <string name="hud_cd_close">Close HUD</string>
+    <string name="hud_dist_laps_fmt">%1$s (%2$d/%3$d)</string>
+    <string name="hud_cell_distance">Distance</string>
+    <string name="hud_cell_pace">Pace</string>
+    <string name="hud_cell_steps">Steps / SPM</string>
+    <string name="hud_cell_status">Status</string>
+    <string name="hud_val_done_hold">Done · Hold</string>
+    <string name="hud_cell_eta">ETA</string>
+    <string name="hud_cell_lap">Lap</string>
+    <string name="hud_val_lap_num">Lap %1$d</string>
+    <string name="hud_static_meta_fmt">Drift ±%1$sm · %2$d apps</string>
+    <string name="hud_standby_offline">Daemon offline · check module</string>
+    <string name="hud_standby_ready_route">Ready · %1$d apps · Route set</string>
+    <string name="hud_standby_ready">Ready · %1$d apps</string>
+    <string name="hud_version_lock_banner_fmt">%1$s · Tap to view</string>
+    <string name="hud_btn_pause">Pause</string>
+    <string name="hud_btn_stop">Stop</string>
+    <string name="hud_btn_reboot">Reboot</string>
+    <string name="hud_btn_locked">Locked</string>
+    <string name="hud_btn_restart">Restart</string>
+    <string name="hud_btn_resume">Resume</string>
+    <string name="hud_btn_open_app">Open App</string>
+    <string name="hud_btn_start">Start</string>
+    <string name="hud_carry_pocket">Pocket</string>
+    <string name="hud_carry_hand">Hand</string>
+    <string name="hud_btn_confirm_reset">Confirm?</string>
+    <string name="hud_btn_reset_steps">Reset</string>
+    <string name="hud_dismiss_release">Release to close</string>
+    <string name="hud_dismiss_drag">Drag here to close</string>
+    <string name="hud_err_version_resume_blocked">Version mismatch: resume blocked</string>
+    <string name="hud_err_version_start_blocked">Version mismatch: start blocked</string>
+
+    <!-- Foreground notification -->
+    <string name="notif_channel_name">Kuroko Teleport Floating HUD Controls</string>
+    <string name="notif_channel_desc">Displays live location and motion simulation status with quick notification controls</string>
+    <string name="notif_title_offline">Kuroko Teleport · Daemon Offline</string>
+    <string name="notif_body_offline">Floating HUD active · Tap to open app and check status</string>
+    <string name="notif_title_moving">Kuroko Teleport · Moving %1$s · %2$s</string>
+    <string name="notif_body_moving">Steps %1$d (%2$d spm) · %3$d target(s)</string>
+    <string name="notif_title_done">Kuroko Teleport · Done · Holding</string>
+    <string name="notif_body_done">Total %1$s · Save workout in fitness app before stopping</string>
+    <string name="notif_title_static">Kuroko Teleport · Static Hold</string>
+    <string name="notif_body_static">WGS84 %1$s, %2$s · %3$d target(s)</string>
+    <string name="notif_title_paused">Kuroko Teleport · Paused · Holding</string>
+    <string name="notif_body_paused">Total %1$s · Steps %2$d</string>
+    <string name="notif_title_ready">Kuroko Teleport · HUD Ready</string>
+    <string name="notif_body_ready">Engine online · %1$d target(s) · Auto-shows in background</string>
+    <string name="notif_action_pause">Pause</string>
+    <string name="notif_action_resume">Resume</string>
+    <string name="notif_action_stop">Stop</string>
+    <string name="notif_action_close_hud">Close HUD</string>
+    <string name="notif_action_view_lock">View Lock</string>
+    <string name="notif_action_open_app">Open App</string>
+</resources>

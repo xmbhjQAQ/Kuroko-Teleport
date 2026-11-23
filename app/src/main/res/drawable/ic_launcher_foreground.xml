@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- W1 Split Pin: upper teardrop body with true evenOdd hollow circle cutout (#C48077 rose-terracotta) -->
+    <path
+        android:fillColor="#C48077"
+        android:fillType="evenOdd"
+        android:pathData="M37.79,51.28 A18.20,18.20 0 1,1 70.21,51.28 L69.06,53.52 Q68.68,54.26 67.92,54.60 L46.01,64.36 Q44.76,64.91 44.13,63.69 Z M45.35,43.00 A8.65,8.65 0 1,0 62.65,43.00 A8.65,8.65 0 1,0 45.35,43.00 Z" />
+    <!-- W1 Split Pin: subtly shifted lower triangular tip separated by crisp ~24 deg diagonal slice -->
+    <path
+        android:fillColor="#C48077"
+        android:pathData="M48.07,67.74 L63.68,60.79 Q66.39,59.58 65.04,62.23 L54.35,83.15 L47.42,69.59 Q46.77,68.32 48.07,67.74 Z" />
+</vector>

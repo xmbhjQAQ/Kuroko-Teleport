@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Map layers -->
+    <string name="map_layer_amap_sat">高德卫星+路网</string>
+    <string name="map_layer_amap_sat_short">高德卫星</string>
+    <string name="map_layer_esri_sat">Esri 高清卫星</string>
+    <string name="map_layer_esri_sat_short">Esri卫星</string>
+    <string name="map_layer_openfreemap">OpenFreeMap 矢量</string>
+    <string name="map_layer_openfreemap_short">开源矢量</string>
+    <string name="map_layer_tianditu_sat">天地图卫星+注记</string>
+    <string name="map_layer_tianditu_sat_short">天地图</string>
+
+    <!-- Geocoder -->
+    <string name="geo_error_search_failed">地名搜索失败，请检查网络连接</string>
+    <string name="geo_provider_photon">Photon</string>
+    <string name="geo_provider_osm">OSM</string>
+    <string name="geo_provider_amap">高德→WGS84</string>
+    <string name="geo_provider_tianditu">天地图</string>
+
+    <!-- Built-in speed presets -->
+    <string name="preset_walk">散步</string>
+    <string name="preset_jog">慢跑</string>
+    <string name="preset_run">快跑</string>
+    <string name="preset_sprint">冲刺</string>
+
+    <!-- Route store & sheet -->
+    <string name="route_default_crosshair_label">当前准星位置</string>
+    <string name="route_import_err_empty">剪贴板内容为空</string>
+    <string name="route_import_err_no_routes">未找到 routes 数组字段</string>
+    <string name="route_import_err_invalid">未解析到有效路线数据</string>
+    <string name="route_unnamed">未命名方案</string>
+    <string name="route_sheet_title">场景路线方案 (%1$d)</string>
+    <string name="route_export_empty">暂无可导出的路线方案</string>
+    <string name="route_clipboard_label">Kuroko Teleport 路线方案</string>
+    <string name="route_export_copied">已复制 %1$d 条路线 JSON 到剪贴板</string>
+    <string name="route_clipboard_write_failed">写入剪贴板失败，请检查系统剪贴板权限</string>
+    <string name="route_action_export">导出</string>
+    <string name="route_action_import">导入</string>
+    <string name="route_action_cancel">取消</string>
+    <string name="route_laps_infinite">无限圈</string>
+    <string name="route_laps_count">%1$d圈</string>
+    <string name="route_carry_pocket">裤兜</string>
+    <string name="route_carry_hand">摆臂</string>
+    <string name="route_summary_line">%1$s · %2$s · %3$s ±%4$d%% · %5$s · ±%6$sm</string>
+    <string name="route_name_label">方案名称（含路线 + 全套运动参数）</string>
+    <string name="route_name_placeholder">例如：东操场 400m · 8圈慢跑</string>
+    <string name="route_btn_update">更新当前方案</string>
+    <string name="route_default_name_fmt">路线方案 %1$s</string>
+    <string name="route_btn_save_as_new">另存为新方案</string>
+    <string name="route_btn_save_new">保存为新方案</string>
+    <string name="route_need_two_points_hint">在「运动模拟」模式下打 2 个以上点位，即可把轨迹与配速/波动/姿态/抖动打包保存为场景方案。</string>
+    <string name="route_empty_list">暂无已收藏路线方案</string>
+    <string name="route_cd_closed_loop">闭合循环</string>
+    <string name="route_cd_delete">删除方案</string>
+    <string name="route_card_meta_hint">%1$d点 · 点击卡片载入全套方案</string>
+    <string name="route_btn_load_path_only">仅载路线</string>
+    <string name="route_import_dialog_title">导入路线方案 JSON</string>
+    <string name="route_import_dialog_hint">粘贴通过「导出」复制的路线 JSON 文本，将自动合并到当前方案库。</string>
+    <string name="route_import_json_label">JSON 内容</string>
+    <string name="route_import_success">成功导入 %1$d 条路线方案</string>
+    <string name="route_import_failed">导入失败: %1$s</string>
+
+    <!-- Point store & sheet -->
+    <string name="point_import_err_empty">剪贴板内容为空</string>
+    <string name="point_import_err_no_points">未找到 points 数组字段</string>
+    <string name="point_import_err_invalid">未解析到有效点位数据</string>
+    <string name="point_unnamed">未命名点位</string>
+    <string name="point_sheet_title">收藏点位方案 (%1$d)</string>
+    <string name="point_export_empty">暂无可导出的点位</string>
+    <string name="point_clipboard_label">Kuroko Teleport 收藏点位</string>
+    <string name="point_export_copied">已复制 %1$d 个点位 JSON 到剪贴板</string>
+    <string name="point_clipboard_write_failed">写入剪贴板失败，请检查系统剪贴板权限</string>
+    <string name="point_action_export">导出</string>
+    <string name="point_action_import">导入</string>
+    <string name="point_action_cancel">取消</string>
+    <string name="point_current_coord_fmt">WGS-84  %1$s, %2$s · 抖动 ±%3$sm</string>
+    <string name="point_name_label">点位名称（含坐标 + 静态抖动配置）</string>
+    <string name="point_name_placeholder">例如：公司门口 / 图书馆</string>
+    <string name="point_btn_update">更新当前点位</string>
+    <string name="point_default_name_fmt">点位 %1$s</string>
+    <string name="point_btn_save_as_new">另存为新点位</string>
+    <string name="point_btn_save_new">收藏当前点位</string>
+    <string name="point_empty_list">暂无收藏点位。拖动地图将中心准星对准目标位置，在上方输入名称即可收藏。</string>
+    <string name="point_cd_delete">删除点位</string>
+    <string name="point_import_dialog_title">导入点位方案 JSON</string>
+    <string name="point_import_dialog_hint">粘贴通过「导出」复制的点位 JSON 文本，将自动合并到当前收藏点位库。</string>
+    <string name="point_import_json_label">JSON 内容</string>
+    <string name="point_import_success">成功导入 %1$d 个点位方案</string>
+    <string name="point_import_failed">导入失败: %1$s</string>
+
+    <!-- Target app selector sheet -->
+    <string name="target_sheet_title">目标生效应用 (%1$d/%2$d)</string>
+    <string name="target_btn_apply">应用</string>
+    <string name="target_zero_inject_banner">目标 App 零注入：LSPosed 仅勾「系统框架」与「电话服务」，此处按 UID 精准下发分流策略。</string>
+    <string name="target_cd_clear">清空</string>
+    <string name="target_search_placeholder">搜索应用名 / 包名 / UID</string>
+    <string name="target_toggle_system_apps">系统应用</string>
+    <string name="target_policy_strict">跨城严防 (隐WiFi+基站)</string>
+    <string name="target_policy_local_outdoor">同城户外 (保基站)</string>
+
+    <!-- Help guide sheet -->
+    <string name="help_title">Kuroko Teleport 使用说明与参数指南</string>
+    <string name="help_subtitle">系统层单应用按 UID 精准仿真 · 目标 App 零注入</string>
+
+    <string name="help_sec1_title">1. 快速上手 3 步</string>
+    <string name="help_sec1_b1_head">第一步 · 选目标 App</string>
+    <string name="help_sec1_b1_body">点击「目标 App」，勾选需要生效的应用（按 UID 精准隔离，全局独立生效，切换路线或点位方案不会改动已选应用）。</string>
+    <string name="help_sec1_b2_head">第二步 · 选模式并选点/打点</string>
+    <string name="help_sec1_b2_body">在底部切换到「定点模拟」或「运动模拟」，拖动地图使中心准星对准位置后选点或点击「+ 打点」；按住底部面板手柄上下拖拽即可丝滑收起或展开。</string>
+    <string name="help_sec1_b3_head">第三步 · 点击开始</string>
+    <string name="help_sec1_b3_body">点击绿色「开始定点」或「开始运动」即可实时生效，底部面板收起后可获得 %1$d%%+ 纯净地图视野，右侧快捷按钮会随面板同步贴合跟随。</string>
+
+    <string name="help_sec2_title">2. 场景方案、草稿记忆与长按预设</string>
+    <string name="help_sec2_b1_head">自动断点续传（重启不丢草稿）</string>
+    <string name="help_sec2_b1_body">当前打点草稿、定点位置、定点/运动各自的 GPS 抖动、配速、波动、携带姿态和地图视角均会自动保存，重新打开 App 立即恢复。</string>
+    <string name="help_sec2_b2_head">场景方案（路线+全套参数 / 仅载路线）</string>
+    <string name="help_sec2_b2_body">收藏路线时会将轨迹与重复圈数、速度、配速波动、姿态和抖动打包保存；点击卡片一键载入全套方案，点击「仅载路线」则只换轨迹保留当前配速。已载入方案支持「更新当前方案」或「另存为新方案」，并支持剪贴板 JSON 一键导出/导入。</string>
+    <string name="help_sec2_b3_head">自定义速度预设（长按保存）</string>
+    <string name="help_sec2_b3_body">在「运动模拟」调好顺手的速度、配速波动与姿态后，长按「散步 / 慢跑 / 快跑 / 冲刺」任一按钮即可覆盖保存为你的专属预设；在设置中随时可恢复默认预设。</string>
+
+    <string name="help_sec3_title">3. 关键参数大白话说明</string>
+    <string name="help_sec3_b1_head">手持摆臂 vs 裤兜</string>
+    <string name="help_sec3_b1_body">控制合成的手机姿态角与摆动幅度——「手持摆臂」模拟手持屏幕斜向上约 30° 且随步伐较大幅度前后摆臂；「裤兜」模拟手机竖直放在裤兜/腰包约 80° 且旋转摆幅更紧凑，让加速度计与陀螺仪贴合真实携带习惯。</string>
+    <string name="help_sec3_b2_head">配速波动区间（推荐 %1$d%%~%2$d%%）</string>
+    <string name="help_sec3_b2_body">真人跑步不会像机器人一样绝对匀速。设置 ±%1$d%% 会以双时间尺度自然起伏并叠加弯道轻微降速，面板实时显示对应的最快~最慢配速范围。</string>
+    <string name="help_sec3_b3_head">GPS 抖动（默认 2.0m）</string>
+    <string name="help_sec3_b3_body">模拟真实户外卫星信号的有色慢漂移，避免定位轨迹成为机械笔直的折线。</string>
+    <string name="help_sec3_b4_head">跨城严防 vs 同城户外</string>
+    <string name="help_sec3_b4_body">「跨城严防」同时屏蔽真实 Wi-Fi 列表与手机基站，适合跨省/跨城定位防穿帮；「同城户外」仅屏蔽室内 Wi-Fi 而保留本地真实基站，减少部分 App 对无基站信号的异常风控。</string>
+
+    <string name="help_sec4_title">4. 顶部硬件状态灯图例</string>
+    <string name="help_led_engine_tag">引擎 ●</string>
+    <string name="help_led_engine_desc">kuroko_daemon 后台守护进程已通过本地认证连接 (127.0.0.1:28765)</string>
+    <string name="help_led_loc_desc">system_server 共享内存通道已握手（定位 / 卫星 / NMEA / Wi-Fi 生效）</string>
+    <string name="help_led_phone_desc">com.android.phone 通道已握手（跨城严防基站屏蔽生效）</string>
+    <string name="help_led_sensor_desc">Native 计步器与 5 轴 IMU 传感器钩子已就绪（步数 / 步频 / 加速度 / 陀螺仪 / 方向仿真；若显示 S× 请检查 KSU 模块 v%1$s 与 Zygisk Next）</string>
+
+    <string name="help_sec5_title">5. 安全收尾与 LSPosed 作用域提醒</string>
+    <string name="help_sec5_b1_head">跑完自动原地停留（防瞬间瞬移）</string>
+    <string name="help_sec5_b1_body">达到设定的「重复次数」或「目标里程」后，引擎不会直接关闭，而是自动切为「已完成 · 原地停留」并保持终点位置。请先切回跑步 App 点击结束并保存记录，确认上传成功后再回到 Kuroko Teleport 点击「停止」。</string>
+    <string name="help_sec5_b2_head">LSPosed 作用域铁律</string>
+    <string name="help_sec5_b2_body">在 LSPosed 管理器中，仅需勾选「系统框架 (android)」和「电话服务 (com.android.phone)」，绝对不要勾选任何目标 App！所有分流均在系统层无痕完成。</string>
+
+    <string name="help_sec6_title">6. 后台悬浮窗与通知栏快捷控制</string>
+    <string name="help_sec6_b1_head">智能自动显隐（切后台自动浮现）</string>
+    <string name="help_sec6_b1_body">点击顶栏悬浮窗图标或在设置中开启「后台悬浮窗」并授予「显示在其他应用上层」权限。默认开启「回到主界面自动隐藏」，当你切去地图或运动类目标 App 时悬浮胶囊会自动浮现，切回 Kuroko Teleport 时自动隐藏绝不遮挡地图。</string>
+    <string name="help_sec6_b2_head">贴边迷你胶囊 &amp; 底部拖曳关闭</string>
+    <string name="help_sec6_b2_body">胶囊仅显示 6dp 状态灯与核心里程/配速，4 秒无操作自动轻微半透明；松手自动弹簧吸附至屏幕左/右边缘；拖动胶囊至屏幕底部中央「× 拖到此处关闭」热区并松手即可一键关闭悬浮窗。</string>
+    <string name="help_sec6_b3_head">展开迷你控制台（252dp 精简操作）</string>
+    <string name="help_sec6_b3_body">单击胶囊即可就地展开迷你控制台，不切回 Kuroko Teleport 即可暂停/继续/停止、±0.3 m/s 实时微调配速、一键套用 4 个自定义速度预设、切换摆臂/裤兜姿态，以及防误触二次确认重置步数；拖动顶栏可自由挪动位置。</string>
+    <string name="help_sec6_b4_head">通知栏快捷控制 &amp; 防录屏隐身</string>
+    <string name="help_sec6_b4_body">开启悬浮窗后将常驻低打扰状态通知，下拉通知栏可直接点「暂停 / 继续 / 停止 / 关悬浮窗」。如需在截屏或录屏时隐藏悬浮窗，可在设置中实时开启「防截屏/录屏隐身 (FLAG_SECURE)」。建议在系统电池设置中将 Kuroko Teleport 设为「无限制」以防长时间后台被回收。</string>
+
+    <!-- Floating HUD -->
+    <string name="hud_status_offline">离线</string>
+    <string name="hud_status_done">已完成</string>
+    <string name="hud_status_moving">运动中</string>
+    <string name="hud_status_holding">定点中</string>
+    <string name="hud_status_paused">已暂停</string>
+    <string name="hud_status_idle">待机</string>
+    <string name="hud_capsule_holding">定点停留</string>
+    <string name="hud_cd_open_main">回到主界面</string>
+    <string name="hud_cd_collapse">收起为胶囊</string>
+    <string name="hud_cd_close">关闭悬浮窗</string>
+    <string name="hud_dist_laps_fmt">%1$s (%2$d/%3$d圈)</string>
+    <string name="hud_cell_distance">里程</string>
+    <string name="hud_cell_pace">实时配速</string>
+    <string name="hud_cell_steps">步数/步频</string>
+    <string name="hud_cell_status">状态</string>
+    <string name="hud_val_done_hold">已完成·停留</string>
+    <string name="hud_cell_eta">剩余ETA</string>
+    <string name="hud_cell_lap">当前圈数</string>
+    <string name="hud_val_lap_num">第 %1$d 圈</string>
+    <string name="hud_static_meta_fmt">漂移 ±%1$sm · 目标 %2$d 个</string>
+    <string name="hud_standby_offline">守护进程未连接，请检查模块</string>
+    <string name="hud_standby_ready_route">引擎就绪 · 目标 %1$d 个 · 已存路线</string>
+    <string name="hud_standby_ready">引擎就绪 · 目标 %1$d 个</string>
+    <string name="hud_version_lock_banner_fmt">%1$s · 点主界面查看</string>
+    <string name="hud_btn_pause">暂停停留</string>
+    <string name="hud_btn_stop">停止</string>
+    <string name="hud_btn_reboot">需重启</string>
+    <string name="hud_btn_locked">版本锁定</string>
+    <string name="hud_btn_restart">重跑路线</string>
+    <string name="hud_btn_resume">继续运动</string>
+    <string name="hud_btn_open_app">打开主界面</string>
+    <string name="hud_btn_start">启动路线</string>
+    <string name="hud_carry_pocket">裤兜</string>
+    <string name="hud_carry_hand">摆臂</string>
+    <string name="hud_btn_confirm_reset">再点确认</string>
+    <string name="hud_btn_reset_steps">重置步数</string>
+    <string name="hud_dismiss_release">松手关闭悬浮窗</string>
+    <string name="hud_dismiss_drag">拖到此处关闭</string>
+    <string name="hud_err_version_resume_blocked">版本未对齐，已拒绝继续</string>
+    <string name="hud_err_version_start_blocked">版本未对齐，已拒绝启动</string>
+
+    <!-- Foreground notification -->
+    <string name="notif_channel_name">Kuroko Teleport 后台悬浮窗控制</string>
+    <string name="notif_channel_desc">显示实时定位/运动模拟状态并提供通知栏快捷控制</string>
+    <string name="notif_title_offline">Kuroko Teleport · 守护进程未连接</string>
+    <string name="notif_body_offline">悬浮窗运行中 · 点击打开主界面检查状态</string>
+    <string name="notif_title_moving">Kuroko Teleport · 运动中 %1$s · %2$s</string>
+    <string name="notif_body_moving">步数 %1$d (%2$d spm) · 目标 %3$d 个</string>
+    <string name="notif_title_done">Kuroko Teleport · 已完成 · 原地停留</string>
+    <string name="notif_body_done">累计 %1$s · 请先在跑步 App 保存再点停止</string>
+    <string name="notif_title_static">Kuroko Teleport · 定点停留中</string>
+    <string name="notif_body_static">WGS84 %1$s, %2$s · 目标 %3$d 个</string>
+    <string name="notif_title_paused">Kuroko Teleport · 已暂停 · 原地停留</string>
+    <string name="notif_body_paused">累计 %1$s · 步数 %2$d</string>
+    <string name="notif_title_ready">Kuroko Teleport · 悬浮窗就绪</string>
+    <string name="notif_body_ready">引擎在线 · 目标 App %1$d 个 · 切到后台自动浮现</string>
+    <string name="notif_action_pause">暂停</string>
+    <string name="notif_action_resume">继续</string>
+    <string name="notif_action_stop">停止</string>
+    <string name="notif_action_close_hud">关悬浮窗</string>
+    <string name="notif_action_view_lock">查看锁定</string>
+    <string name="notif_action_open_app">打开主界面</string>
+</resources>

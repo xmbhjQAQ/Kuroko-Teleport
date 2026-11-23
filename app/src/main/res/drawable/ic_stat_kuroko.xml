@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- W1 Split Pin 24dp pure-white monochrome status bar notification icon -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M6.39,11.06 A6.30,6.30 0 1,1 17.61,11.06 L17.21,11.83 Q17.08,12.09 16.82,12.21 L9.24,15.58 Q8.80,15.78 8.59,15.35 Z M9.01,8.20 A2.99,2.99 0 1,0 14.99,8.20 A2.99,2.99 0 1,0 9.01,8.20 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M9.95,16.75 L15.35,14.35 Q16.29,13.93 15.82,14.85 L12.12,22.08 L9.72,17.39 Q9.50,16.95 9.95,16.75 Z" />
+</vector>

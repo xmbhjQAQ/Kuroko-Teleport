@@ -1,0 +1,31 @@
+# Allow zygote (preServerSpecialize runs in u:r:zygote:s0 before system_server transition),
+# system_server, and radio (com.android.phone) to use read-only memfd FDs passed from su/magisk
+allow zygote su fd use
+allow zygote magisk fd use
+allow system_server su fd use
+allow system_server magisk fd use
+allow radio su fd use
+allow radio magisk fd use
+
+# Allow read-only mmap/stat of memfd backing files (tmpfs / su_tmpfs / magisk_tmpfs)
+allow zygote tmpfs file { read getattr map }
+allow zygote su_tmpfs file { read getattr map }
+allow zygote magisk_tmpfs file { read getattr map }
+allow system_server tmpfs file { read getattr map }
+allow system_server su_tmpfs file { read getattr map }
+allow system_server magisk_tmpfs file { read getattr map }
+allow radio tmpfs file { read getattr map }
+allow radio su_tmpfs file { read getattr map }
+allow radio magisk_tmpfs file { read getattr map }
+
+# Allow root daemon (su/magisk) to transact memfd handoff over Binder to system_server and radio
+allow su system_server binder { call transfer }
+allow magisk system_server binder { call transfer }
+allow su radio binder { call transfer }
+allow magisk radio binder { call transfer }
+
+# Allow root daemon to look up location and phone services via servicemanager
+allow su location_service service_manager find
+allow magisk location_service service_manager find
+allow su radio_service service_manager find
+allow magisk radio_service service_manager find

@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-audit:
+    name: Build & Audit (ARM64 + APK + KSU Module)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK platform, build-tools, NDK & CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;27.2.12479018"
+          sdkmanager "cmake;3.31.6" || sdkmanager "cmake;3.22.1"
+
+          NDK_DIR="$ANDROID_HOME/ndk/27.2.12479018"
+          if [ ! -d "$NDK_DIR" ]; then
+            NDK_DIR="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          fi
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+
+          if ! find "$ANDROID_HOME/cmake" -name ninja -type f 2>/dev/null | grep -q . && ! command -v ninja >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ninja-build
+          fi
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Audit version contract, Android XML i18n & shell lang packs
+        run: python3 scripts/audit_i18n.py
+
+      - name: Build Debug Controller/LSPosed APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug
+
+      - name: Build & ELF/ZIP audit All-in-One KSU2/Zygisk module
+        run: python3 build_module.py
+
+      - name: Upload CI build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kuroko-teleport-ci-artifacts
+          path: |
+            dist/kuroko-teleport-ksu-module.zip
+            app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+          if-no-files-found: error

@@ -1,0 +1,275 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Kuroko Teleport</string>
+    <string name="xposed_description">Kuroko Teleport system-level GPS &amp; gait/IMU simulation engine (select System Framework &amp; Phone Services only; zero target app injection)</string>
+
+    <!-- Common -->
+    <string name="common_ok">OK</string>
+    <string name="common_cancel">Cancel</string>
+    <string name="common_save">Save</string>
+    <string name="common_close">Close</string>
+    <string name="common_stop">Stop</string>
+    <string name="common_pause">Pause</string>
+    <string name="common_resume">Resume</string>
+    <string name="common_details">Details</string>
+    <string name="common_legacy_short">Old</string>
+    <string name="common_legacy">Legacy</string>
+    <string name="common_list_sep">, </string>
+
+    <!-- Daemon IPC & Errors -->
+    <string name="daemon_connecting">Connecting to 127.0.0.1:%1$d …</string>
+    <string name="daemon_status_connected">127.0.0.1:%1$d · %2$d target app(s)</string>
+    <string name="daemon_unresponsive">Daemon unresponsive</string>
+    <string name="daemon_err_empty_route">Route cannot be empty</string>
+    <string name="daemon_err_disconnected">Daemon disconnected</string>
+    <string name="daemon_err_token_expired">Auth token expired, please retry</string>
+    <string name="daemon_err_comm_failed">Daemon communication failed</string>
+    <string name="daemon_err_auth_no_resp">No auth response from daemon</string>
+    <string name="daemon_err_auth_failed">Daemon auth failed: %1$s</string>
+    <string name="daemon_err_su_failed">Unable to run su for daemon token: %1$s</string>
+    <string name="daemon_err_root_timeout">Root token read timed out</string>
+    <string name="daemon_err_token_read">Failed to read %1$s (code=%2$d): %3$s</string>
+    <string name="daemon_err_token_empty">Daemon token is empty; verify kuroko_daemon is running</string>
+    <string name="daemon_err_no_draft_route">No route drawn yet. Add points on the main map first.</string>
+
+    <!-- 4-Tier Version Compatibility & Strict Lock -->
+    <string name="compat_offline_headline">Daemon Offline</string>
+    <string name="compat_offline_detail">Cannot verify 4-tier versions; ensure kuroko_daemon is running</string>
+    <string name="compat_offline_hint">Check the Kuroko Teleport module in KernelSU Manager, then reboot or reconnect</string>
+    <string name="compat_matched_headline">All 4 tiers aligned (v%1$s #%2$d)</string>
+    <string name="compat_matched_detail">App / LSPosed Hook / Native Daemon / Zygisk Sensor · P%1$d matched</string>
+    <string name="compat_reboot_headline">Reboot Required</string>
+    <string name="compat_reboot_detail">App and Daemon are at v%1$s (#%2$d), but %3$s in system memory is still outdated.</string>
+    <string name="compat_reboot_hint">Reboot your device so the new system hooks take effect before starting.</string>
+    <string name="compat_legacy_mod_headline">Legacy Module · Locked</string>
+    <string name="compat_legacy_mod_detail">Daemon reported no version (legacy module); incompatible with App v%1$s (#%2$d).</string>
+    <string name="compat_mod_older_headline">Module Outdated · Locked</string>
+    <string name="compat_mod_older_detail">KSU module v%1$s (#%2$d) / P%3$d is older than App v%4$s (#%5$d) / P%6$d.</string>
+    <string name="compat_flash_module_hint">Flash the Kuroko Teleport v%1$s All-in-One ZIP in KernelSU Manager and reboot.</string>
+    <string name="compat_app_older_headline">App Outdated · Locked</string>
+    <string name="compat_app_older_detail">App v%1$s (#%2$d) is older than KSU module v%3$s (#%4$d).</string>
+    <string name="compat_app_older_hint">Update to Kuroko Teleport App v%1$s (or re-flash the v%1$s All-in-One ZIP).</string>
+    <string name="compat_proto_mismatch_headline">Version Mismatch · Locked</string>
+    <string name="compat_proto_mismatch_detail">Module v%1$s (#%2$d) P%3$d/SHM%4$d mismatches App v%5$s (#%6$d) P%7$d/SHM%8$d.</string>
+    <string name="compat_proto_mismatch_hint">Flash the full Kuroko Teleport v%1$s All-in-One ZIP and reboot so all 4 tiers match.</string>
+
+    <!-- Main Screen Status & Top Bar -->
+    <string name="main_status_offline">Offline</string>
+    <string name="main_status_completed">Done</string>
+    <string name="main_status_moving">Running</string>
+    <string name="main_status_static">Holding</string>
+    <string name="main_status_ready">Ready</string>
+    <string name="main_cd_hud_toggle">Toggle Floating HUD</string>
+    <string name="main_cd_help">User Guide</string>
+    <string name="main_cd_settings">Settings</string>
+    <string name="main_cd_clear">Clear</string>
+    <string name="main_cd_search">Search</string>
+    <string name="main_cd_locate_me">Locate Me</string>
+    <string name="main_cd_saved_points">Saved Points</string>
+    <string name="main_cd_undo">Undo</string>
+    <string name="main_cd_loop">Loop Route</string>
+    <string name="main_cd_expand_sheet">Expand panel</string>
+    <string name="main_cd_collapse_sheet">Collapse panel</string>
+    <string name="main_cd_dec_laps">Decrease laps</string>
+    <string name="main_cd_inc_laps">Increase laps</string>
+    <string name="main_pill_reboot">Reboot</string>
+    <string name="main_pill_locked">Locked</string>
+    <string name="main_search_hint">Search campus, track, park, address…</string>
+
+    <!-- Main Screen HUD & Map Tools -->
+    <string name="main_hud_state">State</string>
+    <string name="main_hud_eta">ETA</string>
+    <string name="main_hud_lap_est">Lap Est</string>
+    <string name="main_hud_est_time">Est Time</string>
+    <string name="main_hud_lap">Lap</string>
+    <string name="main_hud_dist">Dist</string>
+    <string name="main_hud_laps">Laps</string>
+    <string name="main_hud_pace">Pace</string>
+    <string name="main_hud_steps">Steps</string>
+    <string name="main_completed_banner">Done · Holding in place (save workout in target app before stopping)</string>
+    <string name="main_static_active_badge">Static Hold</string>
+    <string name="main_btn_pick_here">Set Here</string>
+    <string name="main_btn_saved_points_short">Saved (%1$d)</string>
+    <string name="main_btn_add_point">+ Point (%1$d)</string>
+    <string name="main_btn_undo">Undo</string>
+    <string name="main_btn_clear">Clear</string>
+    <string name="main_btn_loop">Loop</string>
+    <string name="main_btn_one_way">One-Way</string>
+
+    <!-- Main Screen Bottom Sheet -->
+    <string name="main_mode_static_short">Static</string>
+    <string name="main_mode_motion_short">Motion</string>
+    <string name="main_mode_static">Static Point</string>
+    <string name="main_mode_motion">Motion Route</string>
+    <string name="main_btn_stop_sim">Stop Sim</string>
+    <string name="main_btn_start_static">Hold Point</string>
+    <string name="main_btn_update_static">Update Pin</string>
+    <string name="main_btn_start_motion">Start Run</string>
+    <string name="main_btn_update_route">Update</string>
+    <string name="main_btn_expand">Open</string>
+    <string name="main_btn_collapse">Hide</string>
+    <string name="main_static_selected">Selected: %1$s</string>
+    <string name="main_static_follow_crosshair">Target: Follow map crosshair</string>
+    <string name="main_btn_back_crosshair">Crosshair</string>
+    <string name="main_default_crosshair_label">Current Crosshair</string>
+    <string name="main_btn_saved_points">Points (%1$d)</string>
+    <string name="main_btn_target_apps">Apps (%1$d)</string>
+    <string name="main_btn_saved_routes">Routes (%1$d)</string>
+    <string name="main_label_static_jitter">Static GPS Drift Jitter</string>
+    <string name="main_label_dynamic_jitter">Motion Jitter</string>
+    <string name="main_preview_finite">Planned %1$s · Est %2$s</string>
+    <string name="main_preview_loop">Lap %1$s · ~%2$s/lap (∞ loop)</string>
+    <string name="main_repeat_label">Repeat: %1$s</string>
+    <string name="main_repeat_infinite">Infinite</string>
+    <string name="main_repeat_infinite_short">∞</string>
+    <string name="main_repeat_times">%1$dx</string>
+    <string name="main_repeat_chip_times">%1$dx</string>
+    <string name="main_target_km_set">Goal %1$.1fkm</string>
+    <string name="main_target_km_unset">Goal km</string>
+    <string name="main_chip_custom">Custom</string>
+    <string name="main_label_avg_speed">Avg Speed (long-press preset to save)</string>
+    <string name="main_label_pace_var">Pace Variance</string>
+    <string name="main_carry_hand">Hand Swing</string>
+    <string name="main_carry_pocket">Pocket</string>
+    <string name="main_pace_constant">Avg %1$s · Constant</string>
+    <string name="main_pace_range">Avg %1$s · ±%2$d%% (%3$s~%4$s)</string>
+    <string name="main_duration_hms">%1$dh %2$02dm %3$02ds</string>
+    <string name="main_duration_ms">%1$02dm %2$02ds</string>
+
+    <!-- Main Screen Toasts -->
+    <string name="main_toast_hud_on_autohide">Floating HUD enabled (auto-appears in background)</string>
+    <string name="main_toast_hud_on">Floating HUD enabled</string>
+    <string name="main_toast_hud_off">Floating HUD closed</string>
+    <string name="main_toast_hud_perm_denied">Overlay permission not granted; Floating HUD disabled</string>
+    <string name="main_toast_loc_unavailable">System location service unavailable</string>
+    <string name="main_toast_loc_disabled">System location is off; enable Location in Quick Settings</string>
+    <string name="main_toast_located">Located at current position (±%1$dm)</string>
+    <string name="main_toast_located_cached">Jumped to last known location</string>
+    <string name="main_toast_loc_failed">No GPS fix yet; move near a window or check Location settings</string>
+    <string name="main_toast_loc_perm_needed">Location permission is required for Locate Me</string>
+    <string name="main_toast_set_point_failed">Failed to set point: %1$s</string>
+    <string name="main_toast_static_started">Static hold active (still + ±%1$.1fm drift)</string>
+    <string name="main_toast_static_failed">Failed to start static hold: %1$s</string>
+    <string name="main_toast_need_two_points">Add at least 2 points on the map to build a route</string>
+    <string name="main_toast_set_route_failed">Failed to send route: %1$s</string>
+    <string name="main_toast_motion_started">Motion simulation started</string>
+    <string name="main_toast_holding">Switched to holding in place</string>
+    <string name="main_toast_action_failed">Action failed: %1$s</string>
+    <string name="main_toast_search_empty">No matching places found</string>
+    <string name="main_toast_search_failed">Search failed: %1$s</string>
+    <string name="main_toast_need_tdt_token">Enter a free Tianditu Token in Settings first</string>
+    <string name="main_toast_crosshair_locked">Crosshair location locked</string>
+    <string name="main_toast_sim_stopped">Simulation stopped</string>
+    <string name="main_toast_static_stopped">Static simulation stopped</string>
+    <string name="main_toast_motion_stopped">Motion simulation stopped</string>
+    <string name="main_toast_stop_failed">Stop failed: %1$s</string>
+    <string name="main_toast_resumed">Motion resumed</string>
+    <string name="main_toast_resume_failed">Resume failed: %1$s</string>
+    <string name="main_toast_paused">Paused and holding in place</string>
+    <string name="main_toast_pause_failed">Pause failed: %1$s</string>
+    <string name="main_toast_preset_saved">Saved pace to "%1$s" (%2$.1f m/s · ±%3$d%%)</string>
+    <string name="main_toast_targets_applied">Applied to %1$d target app(s)</string>
+    <string name="main_toast_targets_sync_failed">List saved, daemon sync failed: %1$s</string>
+    <string name="main_toast_point_saved">Saved new point "%1$s"</string>
+    <string name="main_toast_point_updated">Updated point "%1$s"</string>
+    <string name="main_toast_point_loaded">Loaded point "%1$s" (±%2$.1fm)</string>
+    <string name="main_toast_route_saved">Saved route profile "%1$s"</string>
+    <string name="main_toast_route_updated">Updated profile "%1$s"</string>
+    <string name="main_toast_route_loaded_full">Loaded full profile "%1$s"</string>
+    <string name="main_toast_route_loaded_only">Loaded route "%1$s" (kept current pace &amp; carry)</string>
+    <string name="main_toast_secure_on">Anti-capture / FLAG_SECURE enabled</string>
+    <string name="main_toast_secure_off">Anti-capture / FLAG_SECURE disabled</string>
+    <string name="main_toast_keys_saved">API keys saved</string>
+    <string name="main_toast_reconnected">Daemon reconnected</string>
+    <string name="main_toast_reconnect_failed">Reconnect failed: %1$s</string>
+    <string name="main_toast_steps_reset">Virtual steps reset to 0</string>
+    <string name="main_toast_reset_failed">Reset failed: %1$s</string>
+    <string name="main_toast_presets_restored">Restored default speed presets (Walk/Jog/Run/Sprint)</string>
+    <string name="main_toast_overlay_settings_failed">Unable to open Overlay permission page; enable it manually in System Settings</string>
+    <string name="main_toast_target_km_set">Goal distance set to %1$.1f km (auto-hold on finish)</string>
+    <string name="main_toast_target_km_cleared">Goal distance limit cleared</string>
+    <string name="main_toast_repeat_infinite">Repeat set to infinite loop</string>
+    <string name="main_toast_repeat_set">Repeat count set to %1$dx</string>
+
+    <!-- Main Screen Dialogs -->
+    <string name="dialog_overlay_perm_title">Overlay Permission Required</string>
+    <string name="dialog_overlay_perm_body">Grant "Display over other apps" to show a docked mini capsule and quick console over target apps while auto-hiding inside Kuroko Teleport.</string>
+    <string name="dialog_overlay_perm_confirm">Grant</string>
+    <string name="dialog_overlay_perm_dismiss">Not Now</string>
+
+    <string name="dialog_target_dist_title">Set Goal Distance (km)</string>
+    <string name="dialog_target_dist_body">Upon reaching the goal distance, the engine automatically switches to "Done · Holding" to prevent snapping back to real GPS.</string>
+    <string name="dialog_target_dist_unlimited">None</string>
+    <string name="dialog_target_dist_input_label">Custom distance (km, 0 = none)</string>
+
+    <string name="dialog_custom_laps_title">Custom Repeat Count</string>
+    <string name="dialog_custom_laps_body">Enter how many laps to repeat (0 = infinite loop). Automatically holds at the end point once finished.</string>
+    <string name="dialog_custom_laps_input_label">Repeat count (0 = infinite)</string>
+
+    <!-- Version Lock Dialog -->
+    <string name="lock_row_app">Controller App</string>
+    <string name="lock_row_xposed">LSPosed Hook</string>
+    <string name="lock_row_daemon">Native Daemon</string>
+    <string name="lock_row_zygisk">Zygisk Sensor</string>
+    <string name="lock_row_proto">Protocol / SHM</string>
+    <string name="lock_tag_base">Base</string>
+    <string name="lock_tag_offline">Off</string>
+    <string name="lock_tag_reboot">Reboot</string>
+    <string name="lock_tag_mismatch">Mismatch</string>
+    <string name="lock_val_no_loc_shm">No link (L×)</string>
+    <string name="lock_val_no_sensor_shm">No link (S×)</string>
+    <string name="lock_proto_value">P%1$d/SHM%2$d (need P%3$d/SHM%4$d)</string>
+    <string name="lock_next_step">Next: %1$s</string>
+    <string name="lock_safe_note">Note: Stop, Pause, Reconnect, Settings, and Route management always remain available for safe wrap-up.</string>
+    <string name="lock_btn_got_it">Got It</string>
+    <string name="lock_btn_open_settings">Open Settings</string>
+
+    <!-- Settings Dialog -->
+    <string name="settings_title">Engine &amp; Map Settings</string>
+    <string name="settings_engine_online">Engine Online</string>
+    <string name="settings_engine_offline">Engine Offline</string>
+    <string name="settings_sensor_hint">S× Tip: Native step/IMU hook not ready. Verify KSU module v%1$s + Zygisk Next and reboot.</string>
+    <string name="settings_lang_section">Language / 语言</string>
+    <string name="settings_lang_auto">System Default</string>
+    <string name="settings_btn_reconnect">Reconnect</string>
+    <string name="settings_btn_reset_steps">Reset Steps</string>
+    <string name="settings_btn_restore_presets">Restore Default Presets (Walk/Jog/Run/Sprint)</string>
+    <string name="settings_btn_open_help">User Guide &amp; Parameter Reference</string>
+
+    <!-- Settings: Sensor Self-Test -->
+    <string name="selftest_title">Pedometer / IMU Self-Test</string>
+    <string name="selftest_btn_start">Start Test</string>
+    <string name="selftest_btn_stop">Stop Test</string>
+    <string name="selftest_idle_desc">Temporarily adds this app\'s UID to the step/IMU channel (without modifying saved target apps) so you can verify live system step &amp; accel injection flat on a desk.</string>
+    <string name="selftest_perm_denied">Physical Activity permission was denied; system step sensors cannot be read. Allow it and retry.</string>
+    <string name="selftest_temp_jog_running">Temporary stationary jog pulse active (auto-restores when stopped or closed)</string>
+    <string name="selftest_jog_locked_banner">Stationary jog locked: %1$s (%2$s)</string>
+    <string name="selftest_jog_idle_hint">Start simulation or tap below for stationary jog pulse; place phone flat on a desk to watch steps increment.</string>
+    <string name="selftest_btn_jog_pulse">Stationary Jog Step Test</string>
+    <string name="selftest_btn_jog_locked">Version Mismatch · Test Locked</string>
+    <string name="selftest_unsupported">Not supported</string>
+    <string name="selftest_waiting_events">Waiting for events…</string>
+    <string name="selftest_waiting_telemetry">Waiting for daemon telemetry…</string>
+    <string name="selftest_step_counter_fmt">%1$.0f (+%2$d steps · %3$d frames)</string>
+    <string name="selftest_step_detector_fmt">Triggered %1$d time(s)</string>
+    <string name="selftest_metric_step_counter">Step Counter (19)</string>
+    <string name="selftest_metric_step_detector">Step Detector (18)</string>
+    <string name="selftest_metric_accel">Accelerometer (1)</string>
+    <string name="selftest_metric_native_diag">Native Telemetry</string>
+
+    <!-- Settings: Floating HUD & Map Keys -->
+    <string name="settings_hud_section">Floating HUD Overlay</string>
+    <string name="settings_hud_enable_title">Enable Floating HUD</string>
+    <string name="settings_hud_enable_sub">Show compact control console over running/map apps</string>
+    <string name="settings_hud_autohide_title">Auto-Hide Inside Kuroko Teleport</string>
+    <string name="settings_hud_autohide_sub">Hide overlay automatically while viewing Kuroko Teleport main map</string>
+    <string name="settings_hud_secure_title">Anti-Screenshot / Screen Recording</string>
+    <string name="settings_hud_secure_sub">Dynamically applies FLAG_SECURE to hide overlay from captures</string>
+    <string name="settings_hud_battery_tip">Battery Tip: Set Kuroko Teleport battery optimization to \"Unrestricted\" in system App Info settings to prevent the floating HUD from being killed in the background.</string>
+    <string name="settings_keys_section">Optional Free Map / Search Keys</string>
+    <string name="settings_keys_desc">Leave blank to use AMap Satellite, Esri, OpenFreeMap, and Photon+OSM search for free. Enter personal free keys to unlock Tianditu or boost China POI search.</string>
+    <string name="settings_tdt_label">Tianditu Token (WGS-84, optional)</string>
+    <string name="settings_tdt_placeholder">Free at console.tianditu.gov.cn</string>
+    <string name="settings_amap_label">AMap Web REST Key (optional)</string>
+    <string name="settings_amap_placeholder">Chinese POI search, auto-converted to WGS-84</string>
+</resources>

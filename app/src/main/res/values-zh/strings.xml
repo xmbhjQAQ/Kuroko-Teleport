@@ -1,0 +1,275 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Kuroko Teleport</string>
+    <string name="xposed_description">Kuroko Teleport 系统级高精度位置与运动步态仿真引擎（仅需勾选系统框架与电话服务，目标 App 零注入）</string>
+
+    <!-- 通用 -->
+    <string name="common_ok">确定</string>
+    <string name="common_cancel">取消</string>
+    <string name="common_save">保存</string>
+    <string name="common_close">关闭</string>
+    <string name="common_stop">停止</string>
+    <string name="common_pause">暂停</string>
+    <string name="common_resume">继续</string>
+    <string name="common_details">详情</string>
+    <string name="common_legacy_short">旧</string>
+    <string name="common_legacy">旧版</string>
+    <string name="common_list_sep">、</string>
+
+    <!-- 守护进程 IPC 与错误 -->
+    <string name="daemon_connecting">正在连接 127.0.0.1:%1$d …</string>
+    <string name="daemon_status_connected">127.0.0.1:%1$d · 目标 App %2$d 个</string>
+    <string name="daemon_unresponsive">守护进程未响应</string>
+    <string name="daemon_err_empty_route">路线不能为空</string>
+    <string name="daemon_err_disconnected">守护进程已断开连接</string>
+    <string name="daemon_err_token_expired">认证令牌已过期，请重试</string>
+    <string name="daemon_err_comm_failed">与守护进程通信失败</string>
+    <string name="daemon_err_auth_no_resp">守护进程认证无响应</string>
+    <string name="daemon_err_auth_failed">守护进程认证失败: %1$s</string>
+    <string name="daemon_err_su_failed">无法执行 su 读取守护进程令牌: %1$s</string>
+    <string name="daemon_err_root_timeout">Root 授权读取令牌超时</string>
+    <string name="daemon_err_token_read">读取 %1$s 失败 (code=%2$d): %3$s</string>
+    <string name="daemon_err_token_empty">守护进程令牌为空，请确认 kuroko_daemon 已启动</string>
+    <string name="daemon_err_no_draft_route">尚未绘制路线，请先在主界面打点</string>
+
+    <!-- 四端版本兼容与严格锁定 -->
+    <string name="compat_offline_headline">守护进程未连接</string>
+    <string name="compat_offline_detail">无法校验四端版本，请先确认 kuroko_daemon 已启动</string>
+    <string name="compat_offline_hint">请在 KernelSU 管理器检查 Kuroko Teleport 模块并重启或重连引擎</string>
+    <string name="compat_matched_headline">四端版本一致 (v%1$s #%2$d)</string>
+    <string name="compat_matched_detail">App / LSPosed Hook / Native Daemon / Zygisk Sensor 协议 P%1$d 全部匹配</string>
+    <string name="compat_reboot_headline">需重启生效</string>
+    <string name="compat_reboot_detail">App 与 Daemon 已同步至 v%1$s(#%2$d)，但系统进程中的 %3$s 仍为旧版。</string>
+    <string name="compat_reboot_hint">请重启手机使新版系统 Hook 生效后再开始模拟。</string>
+    <string name="compat_legacy_mod_headline">模块版本过旧 · 已锁定</string>
+    <string name="compat_legacy_mod_detail">当前守护进程未上报版本号（旧版模块），与 App v%1$s(#%2$d) 不兼容。</string>
+    <string name="compat_mod_older_headline">模块版本落后 · 已锁定</string>
+    <string name="compat_mod_older_detail">KSU 模块 v%1$s(#%2$d) / P%3$d 落后于 App v%4$s(#%5$d) / P%6$d。</string>
+    <string name="compat_flash_module_hint">请在 KernelSU 管理器刷入 Kuroko Teleport v%1$s 一体包并重启手机。</string>
+    <string name="compat_app_older_headline">App 版本落后 · 已锁定</string>
+    <string name="compat_app_older_detail">当前 App v%1$s(#%2$d) 落后于 KSU 模块 v%3$s(#%4$d)。</string>
+    <string name="compat_app_older_hint">请更新至与模块匹配的 v%1$s 新版 Kuroko Teleport App（或重新刷入 v%1$s 一体包）。</string>
+    <string name="compat_proto_mismatch_headline">版本/协议不匹配 · 已锁定</string>
+    <string name="compat_proto_mismatch_detail">模块 v%1$s(#%2$d) P%3$d/SHM%4$d 与 App v%5$s(#%6$d) P%7$d/SHM%8$d 不一致。</string>
+    <string name="compat_proto_mismatch_hint">请刷入完整的 Kuroko Teleport v%1$s 一体包并重启手机，确保四端同源同版。</string>
+
+    <!-- 主界面状态与顶栏 -->
+    <string name="main_status_offline">引擎离线</string>
+    <string name="main_status_completed">已完成</string>
+    <string name="main_status_moving">运动中</string>
+    <string name="main_status_static">定点中</string>
+    <string name="main_status_ready">引擎就绪</string>
+    <string name="main_cd_hud_toggle">后台悬浮窗开关</string>
+    <string name="main_cd_help">使用指南</string>
+    <string name="main_cd_settings">设置</string>
+    <string name="main_cd_clear">清除</string>
+    <string name="main_cd_search">搜索</string>
+    <string name="main_cd_locate_me">定位到我</string>
+    <string name="main_cd_saved_points">收藏点位</string>
+    <string name="main_cd_undo">撤销</string>
+    <string name="main_cd_loop">闭合循环</string>
+    <string name="main_cd_expand_sheet">展开面板</string>
+    <string name="main_cd_collapse_sheet">收起面板</string>
+    <string name="main_cd_dec_laps">减少圈数</string>
+    <string name="main_cd_inc_laps">增加圈数</string>
+    <string name="main_pill_reboot">需重启</string>
+    <string name="main_pill_locked">版本锁定</string>
+    <string name="main_search_hint">搜校园 / 操场 / 公园 / 地址…</string>
+
+    <!-- 主界面遥测与地图悬浮工具 -->
+    <string name="main_hud_state">状态</string>
+    <string name="main_hud_eta">剩余ETA</string>
+    <string name="main_hud_lap_est">单圈约</string>
+    <string name="main_hud_est_time">预计耗时</string>
+    <string name="main_hud_lap">单圈</string>
+    <string name="main_hud_dist">里程</string>
+    <string name="main_hud_laps">圈数</string>
+    <string name="main_hud_pace">配速</string>
+    <string name="main_hud_steps">步数</string>
+    <string name="main_completed_banner">已完成 · 原地停留（请先去跑步 App 保存记录，再点停止）</string>
+    <string name="main_static_active_badge">定点生效中</string>
+    <string name="main_btn_pick_here">选取此处</string>
+    <string name="main_btn_saved_points_short">收藏 (%1$d)</string>
+    <string name="main_btn_add_point">+ 打点 (%1$d)</string>
+    <string name="main_btn_undo">撤销</string>
+    <string name="main_btn_clear">清空</string>
+    <string name="main_btn_loop">闭合循环</string>
+    <string name="main_btn_one_way">单程路线</string>
+
+    <!-- 主界面底部面板 -->
+    <string name="main_mode_static_short">定点</string>
+    <string name="main_mode_motion_short">运动</string>
+    <string name="main_mode_static">定点模拟</string>
+    <string name="main_mode_motion">运动模拟</string>
+    <string name="main_btn_stop_sim">停止仿真</string>
+    <string name="main_btn_start_static">开始定点</string>
+    <string name="main_btn_update_static">定点中 · 更新</string>
+    <string name="main_btn_start_motion">开始运动</string>
+    <string name="main_btn_update_route">更新路线</string>
+    <string name="main_btn_expand">展开</string>
+    <string name="main_btn_collapse">收起</string>
+    <string name="main_static_selected">已选定点：%1$s</string>
+    <string name="main_static_follow_crosshair">待选定点：跟随地图准星</string>
+    <string name="main_btn_back_crosshair">回准星</string>
+    <string name="main_default_crosshair_label">当前准星位置</string>
+    <string name="main_btn_saved_points">收藏点位 (%1$d)</string>
+    <string name="main_btn_target_apps">目标 App (%1$d)</string>
+    <string name="main_btn_saved_routes">路线方案 (%1$d)</string>
+    <string name="main_label_static_jitter">静态 GPS 拟真漂移</string>
+    <string name="main_label_dynamic_jitter">运动抖动</string>
+    <string name="main_preview_finite">计划总程 %1$s · 预计总耗时 %2$s</string>
+    <string name="main_preview_loop">单圈 %1$s · 单圈约 %2$s (无限循环)</string>
+    <string name="main_repeat_label">重复次数：%1$s</string>
+    <string name="main_repeat_infinite">无限循环</string>
+    <string name="main_repeat_infinite_short">无限</string>
+    <string name="main_repeat_times">%1$d 次</string>
+    <string name="main_repeat_chip_times">%1$d次</string>
+    <string name="main_target_km_set">目标 %1$.1fkm</string>
+    <string name="main_target_km_unset">目标km</string>
+    <string name="main_chip_custom">自定义</string>
+    <string name="main_label_avg_speed">平均速度 (长按上方预设可保存)</string>
+    <string name="main_label_pace_var">配速波动</string>
+    <string name="main_carry_hand">手持摆臂</string>
+    <string name="main_carry_pocket">裤兜</string>
+    <string name="main_pace_constant">平均 %1$s · 恒定配速</string>
+    <string name="main_pace_range">平均 %1$s · ±%2$d%% (%3$s~%4$s)</string>
+    <string name="main_duration_hms">%1$d时%2$02d分%3$02d秒</string>
+    <string name="main_duration_ms">%1$02d分%2$02d秒</string>
+
+    <!-- 主界面轻提示 -->
+    <string name="main_toast_hud_on_autohide">后台悬浮窗已开启（切到后台自动浮现）</string>
+    <string name="main_toast_hud_on">后台悬浮窗已开启</string>
+    <string name="main_toast_hud_off">后台悬浮窗已关闭</string>
+    <string name="main_toast_hud_perm_denied">未授予悬浮窗权限，未能开启后台悬浮窗</string>
+    <string name="main_toast_loc_unavailable">系统定位服务不可用</string>
+    <string name="main_toast_loc_disabled">系统定位开关未开启，请在控制中心打开位置信息</string>
+    <string name="main_toast_located">已定位到当前位置 (精度 %1$dm)</string>
+    <string name="main_toast_located_cached">已跳转到最近定位位置</string>
+    <string name="main_toast_loc_failed">暂未获取到定位信号，请移至窗边或确认 GPS/网络定位已开启</string>
+    <string name="main_toast_loc_perm_needed">需要定位权限才能使用「定位到我」</string>
+    <string name="main_toast_set_point_failed">下发定点失败: %1$s</string>
+    <string name="main_toast_static_started">定点模拟已开启（静止 + ±%1$.1fm 漂移）</string>
+    <string name="main_toast_static_failed">启动定点失败: %1$s</string>
+    <string name="main_toast_need_two_points">请先在地图上「+ 打点」至少 2 个点位以构成路线</string>
+    <string name="main_toast_set_route_failed">下发路线失败: %1$s</string>
+    <string name="main_toast_motion_started">运动模拟已启动</string>
+    <string name="main_toast_holding">已切换为原地停留</string>
+    <string name="main_toast_action_failed">操作失败: %1$s</string>
+    <string name="main_toast_search_empty">未找到匹配地点</string>
+    <string name="main_toast_search_failed">搜地失败: %1$s</string>
+    <string name="main_toast_need_tdt_token">请先在设置中填写免费天地图 Token</string>
+    <string name="main_toast_crosshair_locked">已锁定准星点位</string>
+    <string name="main_toast_sim_stopped">仿真已停止</string>
+    <string name="main_toast_static_stopped">定点模拟已停止</string>
+    <string name="main_toast_motion_stopped">运动模拟已停止</string>
+    <string name="main_toast_stop_failed">停止失败: %1$s</string>
+    <string name="main_toast_resumed">已继续运动</string>
+    <string name="main_toast_resume_failed">继续失败: %1$s</string>
+    <string name="main_toast_paused">已暂停并原地停留</string>
+    <string name="main_toast_pause_failed">暂停失败: %1$s</string>
+    <string name="main_toast_preset_saved">已将当前配速保存到「%1$s」预设 (%2$.1f m/s · ±%3$d%%)</string>
+    <string name="main_toast_targets_applied">已生效 %1$d 个目标应用</string>
+    <string name="main_toast_targets_sync_failed">列表已保存，同步守护进程失败: %1$s</string>
+    <string name="main_toast_point_saved">已收藏新点位「%1$s」</string>
+    <string name="main_toast_point_updated">已更新点位「%1$s」</string>
+    <string name="main_toast_point_loaded">已载入点位「%1$s」(±%2$.1fm)</string>
+    <string name="main_toast_route_saved">已保存新路线方案「%1$s」</string>
+    <string name="main_toast_route_updated">已更新方案「%1$s」</string>
+    <string name="main_toast_route_loaded_full">已载入全套方案「%1$s」</string>
+    <string name="main_toast_route_loaded_only">已仅载入轨迹「%1$s」（保留当前配速与姿态）</string>
+    <string name="main_toast_secure_on">已开启防截屏/录屏隐身 (FLAG_SECURE)</string>
+    <string name="main_toast_secure_off">已关闭防截屏/录屏隐身</string>
+    <string name="main_toast_keys_saved">密钥设置已保存</string>
+    <string name="main_toast_reconnected">守护进程重连成功</string>
+    <string name="main_toast_reconnect_failed">重连失败: %1$s</string>
+    <string name="main_toast_steps_reset">虚拟步数已归零</string>
+    <string name="main_toast_reset_failed">重置失败: %1$s</string>
+    <string name="main_toast_presets_restored">已恢复默认配速预设（散步/慢跑/快跑/冲刺）</string>
+    <string name="main_toast_overlay_settings_failed">无法打开系统悬浮窗授权页，请在系统设置中手动开启</string>
+    <string name="main_toast_target_km_set">已设目标里程 %1$.1f km（达标自动停留）</string>
+    <string name="main_toast_target_km_cleared">已取消里程上限</string>
+    <string name="main_toast_repeat_infinite">已设为无限循环</string>
+    <string name="main_toast_repeat_set">已设为重复 %1$d 次</string>
+
+    <!-- 主界面弹窗 -->
+    <string name="dialog_overlay_perm_title">需要悬浮窗权限</string>
+    <string name="dialog_overlay_perm_body">授予「显示在其他应用上层」权限后，切到地图或运动类目标应用时可自动浮现贴边迷你胶囊与快捷控制面板，回到 Kuroko Teleport 时自动隐藏不遮挡地图。</string>
+    <string name="dialog_overlay_perm_confirm">前往授权</string>
+    <string name="dialog_overlay_perm_dismiss">暂不开启</string>
+
+    <string name="dialog_target_dist_title">设置目标里程 (km)</string>
+    <string name="dialog_target_dist_body">达到目标里程后，引擎将自动切换为「已完成 · 原地停留」，防跳回真实位置。</string>
+    <string name="dialog_target_dist_unlimited">不限</string>
+    <string name="dialog_target_dist_input_label">自定义里程 (km，0 表示不限)</string>
+
+    <string name="dialog_custom_laps_title">自定义重复次数</string>
+    <string name="dialog_custom_laps_body">输入路线需要重复执行的次数（0 表示无限循环）。跑满设定次数后自动在终点原地停留。</string>
+    <string name="dialog_custom_laps_input_label">重复次数 (0 = 无限)</string>
+
+    <!-- 四端版本锁定弹窗 -->
+    <string name="lock_row_app">控制器 App</string>
+    <string name="lock_row_xposed">LSPosed Hook</string>
+    <string name="lock_row_daemon">Native Daemon</string>
+    <string name="lock_row_zygisk">Zygisk Sensor</string>
+    <string name="lock_row_proto">协议 / SHM</string>
+    <string name="lock_tag_base">基准</string>
+    <string name="lock_tag_offline">离线</string>
+    <string name="lock_tag_reboot">需重启</string>
+    <string name="lock_tag_mismatch">不匹配</string>
+    <string name="lock_val_no_loc_shm">未握手 (L×)</string>
+    <string name="lock_val_no_sensor_shm">未握手 (S×)</string>
+    <string name="lock_proto_value">P%1$d/SHM%2$d (需 P%3$d/SHM%4$d)</string>
+    <string name="lock_next_step">下一步：%1$s</string>
+    <string name="lock_safe_note">注：停止、暂停、重连、设置与路线管理均保持可用，不会影响正在运行中的安全收尾。</string>
+    <string name="lock_btn_got_it">我知道了</string>
+    <string name="lock_btn_open_settings">打开设置</string>
+
+    <!-- 设置弹窗 -->
+    <string name="settings_title">引擎与地图设置</string>
+    <string name="settings_engine_online">引擎在线</string>
+    <string name="settings_engine_offline">引擎离线</string>
+    <string name="settings_sensor_hint">S× 提示：Native 计步/IMU 钩子未就绪，请检查 KSU 模块是否已更新至 v%1$s 并启用 Zygisk Next 后重启生效。</string>
+    <string name="settings_lang_section">语言 / Language</string>
+    <string name="settings_lang_auto">跟随系统</string>
+    <string name="settings_btn_reconnect">重连引擎</string>
+    <string name="settings_btn_reset_steps">重置步数</string>
+    <string name="settings_btn_restore_presets">恢复默认配速预设（散步/慢跑/快跑/冲刺）</string>
+    <string name="settings_btn_open_help">查看使用说明与参数指南</string>
+
+    <!-- 设置：计步 / IMU 传感器自检 -->
+    <string name="selftest_title">计步 / IMU 传感器自检</string>
+    <string name="selftest_btn_start">开始本机自检</string>
+    <string name="selftest_btn_stop">停止自检</string>
+    <string name="selftest_idle_desc">临时将本应用 UID 加入计步/IMU 通道（不改动已保存的目标 App 列表），手机平放桌面即可直接验收系统步数与加速度注入。</string>
+    <string name="selftest_perm_denied">未授予「身体活动」权限，无法读取系统计步传感器，请在权限弹窗中允许后重试。</string>
+    <string name="selftest_temp_jog_running">临时慢跑原地发步运行中（停止自检或关闭设置将自动恢复原状态）</string>
+    <string name="selftest_jog_locked_banner">已锁定原地发步：%1$s（%2$s）</string>
+    <string name="selftest_jog_idle_hint">建议先开启模拟或使用慢跑模式，手机平放桌面观察步数递增。</string>
+    <string name="selftest_btn_jog_pulse">以慢跑原地发步测试</string>
+    <string name="selftest_btn_jog_locked">版本未对齐 · 已锁定原地发步</string>
+    <string name="selftest_unsupported">设备不支持</string>
+    <string name="selftest_waiting_events">等待事件…</string>
+    <string name="selftest_waiting_telemetry">等待守护进程回传…</string>
+    <string name="selftest_step_counter_fmt">%1$.0f (+%2$d 步 · %3$d 帧)</string>
+    <string name="selftest_step_detector_fmt">触发 %1$d 次</string>
+    <string name="selftest_metric_step_counter">计步器(19)</string>
+    <string name="selftest_metric_step_detector">步检(18)</string>
+    <string name="selftest_metric_accel">加速度(1)</string>
+    <string name="selftest_metric_native_diag">Native 遥测</string>
+
+    <!-- 设置：后台悬浮窗与地图密钥 -->
+    <string name="settings_hud_section">后台悬浮窗 (Floating HUD)</string>
+    <string name="settings_hud_enable_title">启用后台悬浮窗</string>
+    <string name="settings_hud_enable_sub">切换至跑步/导航 App 时显示迷你控制台</string>
+    <string name="settings_hud_autohide_title">回到主界面自动隐藏</string>
+    <string name="settings_hud_autohide_sub">在 Kuroko Teleport 主界面自动收起不遮挡地图</string>
+    <string name="settings_hud_secure_title">防截屏 / 录屏隐身</string>
+    <string name="settings_hud_secure_sub">动态附加 FLAG_SECURE，系统截屏与录屏中隐藏悬浮窗</string>
+    <string name="settings_hud_battery_tip">省电提示：建议在系统「应用设置 → 省电策略」中将 Kuroko Teleport 设为「无限制」，避免长时间切后台时悬浮窗被系统回收。</string>
+    <string name="settings_keys_section">可选免费地名/图层密钥</string>
+    <string name="settings_keys_desc">留空即可使用高德卫星/Esri/OpenFreeMap 及 Photon+OSM 免费搜地。填写个人免费 Key 可解锁天地图图层或增强国内中文 POI 搜索。</string>
+    <string name="settings_tdt_label">天地图 Token (WGS-84，可选)</string>
+    <string name="settings_tdt_placeholder">console.tianditu.gov.cn 免费申请</string>
+    <string name="settings_amap_label">高德 Web 服务 REST Key (可选)</string>
+    <string name="settings_amap_placeholder">中文地名检索，自动转 WGS-84</string>
+</resources>

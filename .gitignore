@@ -1,0 +1,46 @@
+# Local machine paths & credentials (NEVER commit)
+local.properties
+signing/
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+.env
+.env.*
+
+# Reference samples / temporary scratch
+SAMPLE/
+scratch/
+
+# Gradle / Kotlin / Android build outputs
+.gradle/
+.kotlin/
+build/
+app/build/
+captures/
+.cxx/
+.externalNativeBuild/
+
+# Native CMake build outputs & packaged artifacts
+native/build/
+dist/
+release_assets/
+*.apk
+*.aab
+*.zip
+*.so
+*.o
+*.a
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# IDE / OS metadata
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini

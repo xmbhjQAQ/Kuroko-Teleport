@@ -1,0 +1,238 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag override (optional, defaults to v<RELEASE_VERSION_NAME>)'
+        required: false
+        type: string
+        default: ''
+      prerelease:
+        description: 'Mark GitHub Release as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build & Publish GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Parse version.properties & enforce tag match
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          read_prop() {
+            grep -m1 "^$1=" version.properties | cut -d= -f2- | tr -d '\r\n '
+          }
+
+          VER="$(read_prop RELEASE_VERSION_NAME)"
+          VCODE="$(read_prop RELEASE_VERSION_CODE)"
+          IPC_VER="$(read_prop IPC_PROTOCOL_VERSION)"
+          SHM_VER="$(read_prop SHM_SCHEMA_VERSION)"
+          EXPECTED_TAG="v${VER}"
+
+          if [ -z "$VER" ] || [ -z "$VCODE" ]; then
+            echo "::error::Missing RELEASE_VERSION_NAME or RELEASE_VERSION_CODE in version.properties"
+            exit 1
+          fi
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            if [ "$REF_NAME" != "$EXPECTED_TAG" ]; then
+              echo "::error::Git tag '$REF_NAME' does not match version.properties '$EXPECTED_TAG'. Refusing to publish mismatched release."
+              exit 1
+            fi
+            RELEASE_TAG="$REF_NAME"
+            if [[ "$RELEASE_TAG" == *-* ]]; then
+              IS_PRE="true"
+            else
+              IS_PRE="false"
+            fi
+          else
+            if [ -n "$INPUT_TAG" ]; then
+              if [ "$INPUT_TAG" != "$EXPECTED_TAG" ]; then
+                echo "::error::Input tag '$INPUT_TAG' does not match version.properties '$EXPECTED_TAG'."
+                exit 1
+              fi
+              RELEASE_TAG="$INPUT_TAG"
+            else
+              RELEASE_TAG="$EXPECTED_TAG"
+            fi
+            IS_PRE="${INPUT_PRERELEASE:-false}"
+          fi
+
+          {
+            echo "version=$VER"
+            echo "version_code=$VCODE"
+            echo "ipc_ver=$IPC_VER"
+            echo "shm_ver=$SHM_VER"
+            echo "release_tag=$RELEASE_TAG"
+            echo "is_prerelease=$IS_PRE"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Validated release metadata: tag=$RELEASE_TAG version=$VER code=$VCODE IPC=$IPC_VER SHM=$SHM_VER prerelease=$IS_PRE"
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK platform, build-tools, NDK & CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;27.2.12479018"
+          sdkmanager "cmake;3.31.6" || sdkmanager "cmake;3.22.1"
+
+          NDK_DIR="$ANDROID_HOME/ndk/27.2.12479018"
+          if [ ! -d "$NDK_DIR" ]; then
+            NDK_DIR="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          fi
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+
+          if ! find "$ANDROID_HOME/cmake" -name ninja -type f 2>/dev/null | grep -q . && ! command -v ninja >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ninja-build
+          fi
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Audit version contract, Android XML i18n & shell lang packs
+        run: python3 scripts/audit_i18n.py
+
+      - name: Build APK & All-in-One KSU2/Zygisk module (Option-A Signing)
+        id: build
+        shell: bash
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          if [ -n "${SIGNING_KEYSTORE_BASE64:-}" ] && \
+             [ -n "${SIGNING_STORE_PASSWORD:-}" ] && \
+             [ -n "${SIGNING_KEY_ALIAS:-}" ] && \
+             [ -n "${SIGNING_KEY_PASSWORD:-}" ]; then
+            echo "Signing mode: release (keystore decoded from GitHub Secrets)"
+            printf '%s' "$SIGNING_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > "$RUNNER_TEMP/release.jks"
+            chmod 600 "$RUNNER_TEMP/release.jks"
+            export SIGNING_KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+            ./gradlew :app:assembleRelease
+            APK_PATH="app/build/outputs/apk/release/app-release.apk"
+            SIGNING_MODE="release"
+          else
+            echo "Signing mode: debug (release signing secrets not configured; falling back to debug keystore)"
+            ./gradlew :app:assembleDebug
+            APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+            SIGNING_MODE="debug"
+          fi
+
+          python3 build_module.py --apk "$APK_PATH"
+
+          {
+            echo "apk_path=$APK_PATH"
+            echo "signing_mode=$SIGNING_MODE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Clean up temporary release keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Stage release assets & compose bilingual release notes
+        shell: bash
+        env:
+          VER: ${{ steps.meta.outputs.version }}
+          VCODE: ${{ steps.meta.outputs.version_code }}
+          IPC_VER: ${{ steps.meta.outputs.ipc_ver }}
+          SHM_VER: ${{ steps.meta.outputs.shm_ver }}
+          APK_PATH: ${{ steps.build.outputs.apk_path }}
+          SIGNING_MODE: ${{ steps.build.outputs.signing_mode }}
+        run: |
+          set -euo pipefail
+          rm -rf release_assets
+          mkdir -p release_assets
+
+          ZIP_NAME="kuroko-teleport-v${VER}-ksu-module.zip"
+          APK_NAME="kuroko-teleport-v${VER}-app.apk"
+
+          cp "dist/kuroko-teleport-ksu-module.zip" "release_assets/${ZIP_NAME}"
+          cp "${APK_PATH}" "release_assets/${APK_NAME}"
+          (cd release_assets && sha256sum "${ZIP_NAME}" "${APK_NAME}" > SHA256SUMS.txt)
+
+          if [ "$SIGNING_MODE" = "release" ]; then
+            SIGN_ZH="正式 Release 密钥签名"
+            SIGN_EN="Signed with Release keystore"
+          else
+            SIGN_ZH="Debug 回退签名（未配置 Release 签名 Secrets）"
+            SIGN_EN="Signed with Debug fallback keystore (Release signing secrets not configured)"
+          fi
+
+          SHA_BLOCK="$(cat release_assets/SHA256SUMS.txt)"
+          cat > "$RUNNER_TEMP/release_notes.md" <<EOF
+          ## Kuroko Teleport v${VER} (versionCode ${VCODE})
+
+          - **版本契约 / Version Contract**: \`v${VER}\` (\`versionCode=${VCODE}\`, \`IPC v${IPC_VER}\`, \`SHM v${SHM_VER}\`)
+          - **APK 签名 / Signing**: ${SIGN_ZH} / ${SIGN_EN}
+          - **安装包 / Assets**:
+            - \`${ZIP_NAME}\` — All-in-One KernelSU / KSU2 + Zygisk Next 模块（刷入时自动安装配套控制器 App）
+            - \`${APK_NAME}\` — 独立控制器 & LSPosed 模块 APK（已内置于上方 ZIP，通常无需重复手动安装）
+
+          > **LSPosed 作用域提醒 / LSPosed Scope Reminder**
+          > 请**仅勾选**：**系统框架 (\`android\`)** 与 **电话服务 (\`com.android.phone\`)**，**切勿勾选任何目标应用**。
+          > Enable **ONLY** **System Framework (\`android\`)** and **Phone Services (\`com.android.phone\`)** — **NEVER check target apps**.
+
+          ### SHA-256 Checksums
+          \`\`\`text
+          ${SHA_BLOCK}
+          \`\`\`
+          EOF
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          name: Kuroko Teleport ${{ steps.meta.outputs.release_tag }}
+          prerelease: ${{ steps.meta.outputs.is_prerelease == 'true' }}
+          body_path: ${{ runner.temp }}/release_notes.md
+          generate_release_notes: true
+          files: |
+            release_assets/kuroko-teleport-v${{ steps.meta.outputs.version }}-ksu-module.zip
+            release_assets/kuroko-teleport-v${{ steps.meta.outputs.version }}-app.apk
+            release_assets/SHA256SUMS.txt
