@@ -16,7 +16,7 @@
 - **Zero Target-App Injection & Per-App Isolation**: All location, network sanitization, and sensor simulation happens strictly on the Android system side per calling UID — target app processes and memory are never hooked or modified. Isolate up to 32 target apps simultaneously while unselected apps and the controller itself continue receiving genuine hardware GPS and sensors.
 - **Static Pin & Realistic Route Motion**: Built-in open-source map (no Google Play Services required) with address search, saved pins, and reusable route presets (JSON import/export). Supports smooth curved paths, loop / lap-count / target-distance completion, natural pace variation, and hand-swing or pocket carry postures.
 - **Stationary Indoor Pedometer & IMU Sync**: Delivers synthetic GPS, multi-constellation GNSS/NMEA, monotonically increasing steps, and phase-synchronized motion sensors even while your phone rests completely still indoors — complete with a built-in **Sensor Self-Test** in Settings.
-- **Per-App Wi-Fi & Cell Anti-Leak Isolation**: Choose between **Strict Cross-City** (hides nearby Wi-Fi scans/info, cell towers, and raw GNSS measurements) and **Local Outdoor** (hides Wi-Fi while preserving local cell towers) independently for each target app.
+- **Global RF Signal Simulation & Anti-Leak (4G/5G Cell, Wi-Fi & BLE)**: Pick per-app presets (**Full Spoof / Strict Hide / Local Outdoor**) or fine-tune Cell, Wi-Fi, and BLE independently (`Pass / Hide / Spoof`). Automatically synthesizes geo-aware regional 4G/5G cell towers & network/SIM country codes, nearby virtual Wi-Fi AP lists (regional SSIDs/OUIs/channels, 802.11d country code & optional virtual connected AP), plus Bluetooth/BLE scan suppression & custom iBeacon spoofing (with one-tap local scan import and zero impact on paired headphones/watches).
 - **Background Floating HUD & Screen-Capture Protection**: Edge-snapping floating capsule and expandable mini control panel that auto-appears when backgrounded, notification quick controls, and a dynamic `FLAG_SECURE` screen-capture hiding toggle.
 - **All-in-One Install, Boot-Guard, Diagnostics & Live Language Switch**: A single KernelSU module ZIP auto-installs the companion App and immediately reclaims storage, verifies strict cross-component version alignment, protects against bootloops via `boot-guard`, includes a built-in Diagnostics & Logs center (auto health checks + redacted log export), and supports instant Simplified Chinese / English switching.
 
@@ -51,14 +51,14 @@
 | **Android Version** | **Android 12+** (`minSdk 31`) | Both App and native binaries target Android 12+ (`android-31`) with built-in **Android 12–17 multi-version sensor symbol matching** (verified on Android 17; real-device feedback on Android 12–16 is welcome via Diagnostics export) |
 | **Root Framework** | **KernelSU / KSU2** | Installs the All-in-One module, starts the background daemon at boot, and applies SELinux rules |
 | **Zygisk** | **Zygisk Next** (API v4) | Powers system-side pedometer and IMU simulation |
-| **Xposed** | **LSPosed** | Check **ONLY** `System Framework (android)` and `Phone Services (com.android.phone)` — **never check target apps** |
+| **Xposed** | **LSPosed** | Check **ONLY** `System Framework (android)` and `Phone Services (com.android.phone)` (optionally check `Bluetooth (com.android.bluetooth)` for BLE isolation/spoofing) — **never check target apps** |
 
 ---
 
 ## Quick Installation & Usage
 
 > [!IMPORTANT]
-> **NEVER check any target third-party app in LSPosed.** Kuroko Teleport isolates apps by UID inside system services — only System Framework and Phone Services should be enabled.
+> **NEVER check any target third-party app in LSPosed.** Kuroko Teleport isolates apps by UID inside system services — only System Framework, Phone Services, and optionally Bluetooth should be enabled.
 
 1. **Flash the All-in-One Module ZIP**
    - Push `dist/kuroko-teleport-ksu-module.zip` to your device and install it in **KernelSU Manager → Modules → Install from local**.
@@ -66,15 +66,16 @@
    - Make sure **Zygisk Next** is enabled.
 2. **Configure LSPosed Scope (First Install Only)**
    - Open **LSPosed Manager → Modules → Kuroko Teleport** and toggle the module on.
-   - Check **ONLY** these two system entries:
+   - Check **ONLY** these system entries:
      - `[x]` **System Framework (`android`)**
      - `[x]` **Phone Services (`com.android.phone`)**
+     - `[ ]` **Bluetooth (`com.android.bluetooth`)** *(optional — check only if using BLE scan isolation or custom iBeacon spoofing)*
 3. **Reboot**
    - Reboot your device so the background daemon, Zygisk sensor module, and LSPosed system hooks initialize together.
 4. **Launch & Start Simulating**
    - Open **Kuroko Teleport** and grant Root access on first launch (used solely to read the per-boot authentication token).
-   - Verify all three status indicators show green **`L✓ P✓ S✓`** (you can also switch languages or run **Sensor Self-Test** inside **Settings**).
-   - Open **Target Apps** at the bottom to pick apps and isolation policies, then switch to **Static Pin** or **Route Motion** to start. After reaching your target laps or distance, the engine holds in place automatically — save your session in the target app before tapping **Stop**.
+   - Verify all three status indicators show green **`L✓ P✓ S✓`** (you can switch languages, configure **RF Signal Simulation**, or run **Sensor Self-Test** inside **Settings**).
+   - Open **Target Apps** at the bottom to pick apps and policies (**Full Spoof / Strict Hide / Local Outdoor**, or fine-tune Cell / Wi-Fi / BLE per app), then switch to **Static Pin** or **Route Motion** to start. After reaching your target laps or distance, the engine holds in place automatically — save your session in the target app before tapping **Stop**.
 
 ---
 
@@ -83,7 +84,7 @@
 <details>
 <summary><strong>Why shouldn't I check target apps in LSPosed?</strong></summary>
 
-Kuroko Teleport is designed around zero target-app injection: all spoofing and isolation happens inside `system_server` and `com.android.phone` per calling UID. Checking target apps is unnecessary and breaks zero-injection stealth, increasing exposure to in-app environment detection.
+Kuroko Teleport is designed around zero target-app injection: all spoofing and isolation happens inside `system_server`, `com.android.phone`, and optionally `com.android.bluetooth` per calling UID. Checking target apps is unnecessary and breaks zero-injection stealth, increasing exposure to in-app environment detection.
 
 </details>
 
@@ -123,12 +124,13 @@ Open **Settings → Diagnostics &amp; Logs** (or tap **View Logs** from the offl
 
 ## Roadmap / TODO
 
-- [x] System-side GPS / GNSS / NMEA, stationary pedometer & IMU sync, Wi-Fi & cell anti-leak, floating HUD, CHS/EN live switching, and redacted diagnostics export
+- [x] System-side GPS / GNSS / NMEA, stationary pedometer & IMU sync, floating HUD, CHS/EN live switching, Release update checker, and redacted diagnostics export
+- [x] Global geo-aware 4G/5G virtual cell tower & carrier/country code spoofing
+- [x] Virtual nearby Wi-Fi AP list, country code & custom AP spoofing
+- [x] Bluetooth / BLE scan isolation & custom iBeacon spoofing
 - [ ] Multi-device real-world verification & OEM ROM tuning on Android 12–16 (built-in `android-31` native baseline & multi-version sensor symbol matching already included)
-- [ ] GMS FusedLocationProvider (FLP) support
-- [ ] Virtual 4G/5G cell tower spoofing
-- [ ] Virtual nearby Wi-Fi AP list spoofing
-- [ ] Bluetooth / BLE scan isolation & virtual beacon spoofing
+- [ ] GMS FusedLocationProvider (FLP) & `WorkSource` attribution support
+- [ ] Health Connect & system step-counter ecosystem sync
 - [ ] GPX / KML route import & 360° floating joystick
 
 See [docs/TODOLIST.md](docs/TODOLIST.md) for the full engineering checklist.

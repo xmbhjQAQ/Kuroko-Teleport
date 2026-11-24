@@ -5,10 +5,10 @@
 ```mermaid
 flowchart LR
     P0["Phase 0\n真机探针与基线锁定\n(已完成)"]
-    P1["Phase 1 (v0.6.2 All-in-One)\n国内 LBS + 跑步全闭环 +\n悬浮 HUD + 多语言 + 诊断中心\n(真机验收已完成)"]
-    P2["Phase 2\n多版本 Android 12-17 泛化\n+ 海外 GMS FLP / WorkSource"]
+    P1["Phase 1 (v0.7.0 All-in-One)\nLBS + 跑步 + 悬浮 HUD + 多语言 +\n诊断中心 + 全球射频(基站/Wi-Fi/BLE)\n(核心完成)"]
+    P2["Phase 2\n多版本 Android 12-16 真机验证\n+ 海外 GMS FLP / WorkSource"]
     P3["Phase 3\n微信/支付宝/系统健康\nSteps & Health Connect"]
-    P4["Phase 4\n虚拟基站 / 虚拟 Wi-Fi /\n蓝牙 BLE 隔离与伪造 / LSPlant"]
+    P4["Phase 4\nGPX/KML / 360° 悬浮摇杆 /\n贴路规划 / 可选 LSPlant"]
 
     P0 --> P1 --> P2 --> P3 --> P4
 ```
@@ -29,7 +29,7 @@ flowchart LR
 
 ## Phase 1：国内主流 LBS SDK + 运动计步类应用全闭环（✅ 已完成）
 
-**当前统一基线**：**Kuroko Teleport `v0.6.2`** (`versionCode=11`, `IPC=2`, `SHM=1`) — All-in-One 单包刷入 **`dist/kuroko-teleport-ksu-module.zip`**（内嵌 `ZIP_STORED` `apk/kuroko.apk`）。
+**当前统一基线**：**Kuroko Teleport `v0.7.0`** (`versionCode=13`, `IPC=3`, `SHM=2`) — All-in-One 单包刷入 **`dist/kuroko-teleport-ksu-module.zip`**（内嵌 `ZIP_STORED` `apk/kuroko.apk`）。
 
 **目标**：在不向任何目标第三方 App 注入代码的前提下，实现对主流地图 LBS 定位 SDK 以及第三方运动计步类应用的全链路仿真——即使在室内将手机平放桌面，也能稳定输出平滑轨迹、合法卫星/NMEA 与抗频域检测的同步计步及 5 路 IMU 波形，并具备单包一体分发、四端严格版本锁定与全链路可扩展多语言体验。
 
@@ -47,13 +47,19 @@ flowchart LR
     - 守护进程新增 `SET_LANG <auto|BCP-47>`（原子写 `0600` `/data/adb/kuroko/lang`）；`customize.sh` 实现通用 BCP-47 级联加载（`en.sh -> <primary>.sh -> <script-region>.sh -> <region>.sh`）并安全动态本地化 `$MODPATH/module.prop` 描述后清理 `$MODPATH/lang/`；`build_module.py` 动态扫描并审计 `module_template/lang/*.sh`。
   - **`v0.6.1` 全栈一致性定型与 CI/Release 工程化（✅ 已完成）**：
     - 补齐 Android 13–17 Adaptive + Monochrome 桌面图标、`24dp` 前台保活通知栏矢量图标（`ic_stat_kuroko.xml`）及多密度兼容资源，并将用户可见文案统一泛化为通用 Android 表达；落地跨平台构建脚本、`scripts/audit_i18n.py` 与双 GitHub Actions 工作流（`ci.yml` / `release.yml`）。
-  - **`v0.6.2` 应用内诊断中心、自动体检、脱敏日志包与 Issue 表单（✅ 已通过 5/5 Gate 独立审计，0 缺陷）**：
-    - 落地零常驻后台的 **应用内诊断与日志中心（`DiagnosticsDialog.kt`）**：`DiagnosticCollector.kt` 单次有界只读采集 5 源系统/引擎/LSPosed/传感器日志，配合 400 条内存事件环形缓冲 `AppLogBuffer.kt` 与 5 项本地自动体检（Root/Daemon、四端版本锁、LSPosed L/P、Zygisk 传感器 S 区分多映射与 Android ABI 未适配、SELinux AVC）。
-    - 全链路强制隐私脱敏（永不读 `token`、剥离 API Key / 坐标 / NMEA / MAC / 邮箱与无关应用日志，默认开启目标包名匿名化）+ 零新增敏感权限导出（复制 Markdown 摘要、作用域 `FileProvider` `cache/diagnostics/` 分享 6 文件 ZIP、SAF `CreateDocument` 保存 ZIP）。
-    - 守护进程新增 `/data/adb/kuroko/daemon.log` 256 KB 原子轮转（截取换行对齐 128 KB 尾部写入 `0600` `.tmp` 后 `rename()`）；新增双语 GitHub Issue 反馈表单 `.github/ISSUE_TEMPLATE/bug_report.yml`（字符串库扩展至 491/491 对称键）；优化诊断采集信噪比（两阶段 `logcat`、零误报 SELinux AVC 过滤、严格防跨模块 LSPosed 白名单与精确 ELF 实例数解析）。
-    - **跨版本兼容基线加固**：Native NDK 编译目标下探至 **`android-31`**（与 App `minSdk 31` 一致，零 API>31 Bionic 符号依赖）；`sensor_hook.cpp` 升级为 ABI 安全的 **`HookSlot` 多版本 Android 12–17 候选符号表**（各参数变体独立精确签名包装与 `std::atomic` 原指针防 ARM64 栈参截断、位掩码防重复计数，以及未知 OEM ROM 未命中时 `LOGW` 自动转储候选符号）。
-- **阶段收口验收（✅ 已完成）**：
-  - 已在 Android 17 测试设备完成全链路真机验收：零 Bootloop 启动、SELinux 零拒绝握手、All-in-One 单包双语流式安装与空间回收、`L✓ P✓ S✓` 与四端 `v0.6.2(11)` 全绿对齐、应用内诊断中心自动体检与脱敏 ZIP 导出、内置传感器自检、主流地图跨城定位及运动计步类应用室内桌面静止长时跑圈验收全部通过。
+  - **`v0.6.2` 应用内诊断中心、自动体检、脱敏日志包与跨版本加固（✅ 已完成）**：
+    - 落地零常驻后台的 **应用内诊断与日志中心（`DiagnosticsDialog.kt`）**：`DiagnosticCollector.kt` 单次有界只读采集 5 源日志（两阶段 `logcat`、零误报 SELinux AVC 过滤、严格防跨模块 LSPosed 白名单与精确 ELF 实例数解析），配合 400 条内存事件环形缓冲 `AppLogBuffer.kt` 与 5 项本地自动体检。
+    - 全链路强制隐私脱敏 + 零新增敏感权限导出（复制 Markdown 摘要、作用域 `FileProvider` `cache/diagnostics/` 分享 6 文件 ZIP、SAF `CreateDocument` 保存 ZIP）；守护进程 `/data/adb/kuroko/daemon.log` 256 KB 原子轮转；新增双语 GitHub Issue 表单 `.github/ISSUE_TEMPLATE/bug_report.yml`。
+    - **跨版本与防崩溃加固**：Native NDK 编译目标下探至 **`android-31`**（零 API>31 Bionic 依赖）；`sensor_hook.cpp` 升级为 ABI 安全 20 变体 `HookSlot` 多版本 Android 12–17 候选符号表 + `.rela.plt` 预过滤 + `CONN_C1 | SEND_EVENTS` 预检核心门禁 + 静态 `g_plt_orig_slots` 无条件同步与包装函数回退，彻底杜绝半重定位或缺失符号引发 `system_server` 崩溃。
+  - **`v0.6.3` Release 版本更新检查与 KernelSU `updateJson` 支持（✅ 已完成）**：
+    - 新增仅针对 GitHub Releases 的应用内更新检查（`update/UpdateChecker.kt`、`ui/UpdateDialog.kt`，接入 `MainActivity` 与 `SettingsDialog`），并在 `build_module.py` 与 `.github/workflows/release.yml` 集成 KernelSU `updateJson` 静态元数据发布。
+  - **`v0.7.0` 全球地理感知射频仿真（虚拟 4G/5G 基站 + 虚拟 Wi-Fi 列表 + 蓝牙/BLE 隔离与 iBeacon + 国家码，✅ 已实现）**：
+    - **协议与共享内存升级（`SHM=2` / `IPC=3`）**：`KurokoShm v2` 在 16KB 页内新增 `KurokoRfHeader`、`KurokoCell[8]`、`KurokoWifiAp[16]`、`KurokoBleDevice[16]`；新增 4 组策略位（`SPOOF_WIFI`/`SPOOF_CELL`/`HIDE_BLE`/`SPOOF_BLE`）与 3 预设（全量拟真 `0x3E7` / 严格隐藏 `0x13F` / 同城户外 `0x02F`）；TCP IPC v3 新增 `SET_RF_CONFIG`/`SET_RF_CELLS`/`SET_RF_WIFIS`/`SET_RF_BEACONS` 并扩展 `STATUS` 射频遥测。
+    - **全球射频与地磁合成引擎**：`RfSynthesizer`（`native/daemon/rf_synth.{h,cpp}`）内置覆盖全球主流地区的运营商 MCC/MNC、4G/5G 频段与 Wi-Fi 法规信道表，1Hz 合成时空连续基站（Cost-231 衰落 + 3 dB 切换迟滞）、微网格 Wi-Fi AP 列表与 30B Apple `0x004C` iBeacon 广播；`sim_engine.cpp` 升级南北半球精确的纬度感知偶极子地磁模型。
+    - **三进程系统侧射频 Hook**：`VirtualCellBuilder.kt` + `TelephonyHook.kt`（虚拟 LTE/NR `CellInfo` + 网络/可选 SIM 国家码）；`VirtualWifiBuilder.kt` + `WifiConnectivityHook.kt`（虚拟 `ScanResult` + 802.11d Country IE + `getCountryCode` + 虚拟已连 `WifiInfo`）；`BluetoothHook.kt`（`system_server` `service-bluetooth.jar` 缓存 `IBluetooth` 经仅 Root `KUROKO_BINDER_TX_GET_BT_BINDER` 桥接至 `com.android.bluetooth` `/apex/com.android.bt`，实现按 UID 抑制真实 BLE/经典蓝牙发现与 1Hz 虚拟 iBeacon 注入，`bt_shm` 可选绝不锁死模拟）。
+    - **主控端配置与实测导入**：新增 `RfConfigStore`、`RfLiveImporter`（一键导入当前周边实测基站/Wi-Fi/BLE iBeacon 及按需可选 OpenCelliD 查询）、`TargetAppSheet` 三态微调与 `RfConfigDialog`，并在诊断中心集成蓝牙钩子检查（`B`）与 OpenCelliD Token 脱敏。
+- **阶段收口验收（✅ Phase 1 已完成 · `v0.7.0` 射频真机验收进行中）**：
+  - Phase 1 全链路已在 Android 17 测试设备验收通过；`v0.7.0` 全球射频（4G/5G 基站、Wi-Fi 列表/国家码、蓝牙/BLE 与 iBeacon）待完成实机联合回归验收。
 
 ---
 
@@ -81,20 +87,18 @@ flowchart LR
 
 ---
 
-## Phase 4：全维度环境信号伪造（基站 / Wi-Fi / 蓝牙 BLE）、交互增强与架构演进（🔭 远期演进）
+## Phase 4：全维度环境信号伪造（✅ `v0.7.0` 已落地）、交互增强与架构演进（🔭 持续演进）
 
 **目标**：将环境信号隔离从“安全脱敏隐藏”提升为“按 UID 可切换的时空一致全维度伪造”，覆盖蜂窝基站、Wi-Fi 列表与蓝牙/BLE 三大无线信道，同时完善路线互操作体验并探索去 LSPosed 依赖的极简架构。
 
-- **轨道 3：虚拟蜂窝基站伪造（Virtual Cell Tower Spoofing）**
-  - **时空连续 4G/5G 基站合成**：基于虚拟 WGS-84 坐标（接入离线/在线基站库或确定性区域生成器）合成合理临近 `CellInfoLte` / `CellInfoNr`（包含 `MCC` / `MNC` / `TAC` / `CI` / `PCI` / `EARFCN` / `NR-ARFCN` / `RSRP` / `RSRQ` / `TimingAdvance`），沿模拟运动轨迹平滑切换服务小区与邻区信号强度，彻底规避“有 SIM 卡但零基站”的启发式风控。
-  - **单应用三态蜂窝策略**：扩展 `KurokoShm` 单应用策略位与 UI 选择器，在 `PhoneInterfaceManager`（`com.android.phone`）与 `TelephonyRegistry`（`system_server`）双进程支持按 UID 切换 **`透传 (Pass-through)` / `隐藏 (Hide)` / `虚拟基站伪造 (Virtual Spoof)`**。
-- **轨道 4：虚拟 Wi-Fi AP 列表伪造（Virtual Wi-Fi AP List Spoofing）**
-  - **地理一致周边 AP 列表合成**：在 `WifiServiceImpl.getScanResults`（APEX `service-wifi.jar`）按虚拟坐标与移动轨迹合成合理周边虚拟 `ScanResult` 列表（合法 OUI 段 `BSSID`、自然 `SSID`、2.4GHz/5GHz 频段信道、随距离连续衰减的 `RSSI` 与一致时间戳），并可选配合 `ConnectivityService` 脱敏当前关联 `WifiInfo`。
-  - **单应用双态 Wi-Fi 策略**：支持按目标 UID 在 **`隐藏 (Hide)`** 与 **`虚拟 Wi-Fi 列表 (Virtual AP List)`** 之间独立切换。
-- **轨道 5：蓝牙 / BLE 隔离与伪造（Bluetooth / BLE Isolation & Spoofing）**
-  - **Phase A（按 UID 扫描结果抑制）**：在 `BluetoothManagerService` / `com.android.bluetooth`（`AdapterService` / `ScanManager` / `GattService`）按调用方 UID 屏蔽真实周边 BLE 广播与经典蓝牙扫描发现，封堵室内蓝牙指纹与考勤信标交叉校验泄漏。
-  - **Phase B（可配置虚拟 BLE / iBeacon 注入）**：支持按场景配置虚拟 BLE 广播帧与 iBeacon 参数（`UUID`、`Major`、`Minor`、`TxPower` 与距离耦合 `RSSI`），在目标 UID 发起扫描时按时序注入合法 `ScanResult` 回调。
-- **交互、本地化社区扩展与路线能力增强**：
+- **轨道 3：虚拟蜂窝基站伪造（Virtual Cell Tower Spoofing · ✅ 已完成，`v0.7.0`）**
+  - **时空连续 4G/5G 基站与国家码合成**：`native/daemon/rf_synth.cpp` 基于全球地理区域表与 450m 网格合成合理临近 `CellInfoLte` / `CellInfoNr`（`MCC`/`MNC`/`TAC`/`CI`/`PCI`/`EARFCN`/`NR-ARFCN`/`RSRP`/`RSRQ`/`SINR`/`TimingAdvance`），支持 Cost-231 衰落、OU 波动与 3 dB 切换迟滞，并支持用户固定基站、周边实测一键导入及可选 OpenCelliD 按需查询。
+  - **单应用三态蜂窝策略**：扩展 `KurokoShm v2` 策略位与 `TargetAppSheet` 三态选择器，在 `PhoneInterfaceManager`（`com.android.phone`）与 `TelephonyRegistry`（`system_server`）双进程支持按 UID 切换 **`透传 (Pass)` / `隐藏 (Hide)` / `虚拟基站伪造 (Spoof)`** 及网络/可选 SIM 国家码与运营商改写。
+- **轨道 4：虚拟 Wi-Fi AP 列表伪造（Virtual Wi-Fi AP List Spoofing · ✅ 已完成，`v0.7.0`）**
+  - **地理一致周边 AP 列表与国家码合成**：`VirtualWifiBuilder.kt` + `WifiConnectivityHook.kt` 在 APEX `service-wifi.jar` 中按虚拟坐标 80m 3×3 微网格合成合理周边 `ScanResult` 列表（合法单播 OUI、区域 SSID、合规 2.4GHz/5GHz 信道与 `centerFreq0`、距离衰减 RSSI 与 **802.11d Country IE `id=7`**），按 UID 覆写 `getCountryCode` 与可选虚拟已连 `WifiInfo`，支持 **`透传 (Pass)` / `隐藏 (Hide)` / `虚拟 Wi-Fi 列表 (Spoof)`** 三态切换及用户固定热点。
+- **轨道 5：蓝牙 / BLE 隔离与伪造（Bluetooth / BLE Isolation & Spoofing · ✅ 已完成，`v0.7.0`）**
+  - **按 UID 扫描抑制与 1Hz 虚拟 iBeacon 注入**：`BluetoothHook.kt` 在 `system_server`（`service-bluetooth.jar`）缓存 `IBluetooth` Binder 并经仅 Root 权限 `KUROKO_BINDER_TX_GET_BT_BINDER` 桥接 `g_memfd_ro` 至 `com.android.bluetooth`（`/apex/com.android.bt`），在 `AdapterBinder`/`ScanController`/`ScanBinder`/`ScannerMap`（及 Android 12–15 `GattService` 回退）与 `RemoteDevices` 中按目标 UID 抑制真实 BLE/经典蓝牙发现，1Hz 注入合规 30B Apple `0x004C` iBeacon（校验调用方 `ScanFilter`）与可选环境 BLE，零影响已配对蓝牙耳机/手表。
+- **交互、本地化社区扩展与路线能力增强（📋 规划中）**：
   - **更多社区语言包**：基于三步零硬编码扩展机制，按需扩展 `zh-TW`、`ja`、`ko` 等语种。
   - **GPX / KML / TCX 轨迹导入与导出**：在现有剪贴板 JSON 方案导入导出基础上，增加行业标准 GPX/KML/TCX 轨迹互操作。
   - **虚拟方向摇杆（Floating Joystick）**：在后台悬浮 HUD 基础上扩展 360° 虚拟摇杆手势模式。
