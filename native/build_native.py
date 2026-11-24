@@ -137,20 +137,23 @@ def find_cmake_and_ninja(sdk_dir: str) -> tuple[str, str]:
     return cmake_bin, ninja_bin
 
 
-def detect_android_platform(ndk_dir: str, target_api: int = 35) -> str:
-    """Use android-35 when supported by NDK sysroot, otherwise highest supported API <= target_api."""
+def detect_android_platform(ndk_dir: str, target_api: int = 31) -> str:
+    """Prefer android-31 (Android 12, matching APK minSdk 31); fall back to lowest API >= target_api."""
     prebuilt_root = os.path.join(ndk_dir, "toolchains", "llvm", "prebuilt")
     if os.path.isdir(prebuilt_root):
         for host_tag in os.listdir(prebuilt_root):
             lib_dir = os.path.join(prebuilt_root, host_tag, "sysroot", "usr", "lib", "aarch64-linux-android")
             if os.path.isdir(lib_dir):
                 apis = sorted(
-                    (int(d) for d in os.listdir(lib_dir) if d.isdigit() and os.path.isdir(os.path.join(lib_dir, d))),
-                    reverse=True,
+                    int(d) for d in os.listdir(lib_dir) if d.isdigit() and os.path.isdir(os.path.join(lib_dir, d))
                 )
-                for api in apis:
-                    if api <= target_api:
-                        return f"android-{api}"
+                if target_api in apis:
+                    return f"android-{target_api}"
+                above = [api for api in apis if api >= target_api]
+                if above:
+                    return f"android-{above[0]}"
+                if apis:
+                    return f"android-{apis[-1]}"
     return f"android-{target_api}"
 
 
@@ -160,14 +163,14 @@ def main():
     ndk_dir = find_android_ndk(sdk_dir, local_props)
     cmake_bin, ninja_bin = find_cmake_and_ninja(sdk_dir)
     toolchain = os.path.join(ndk_dir, "build", "cmake", "android.toolchain.cmake")
-    android_platform = detect_android_platform(ndk_dir, target_api=35)
+    android_platform = detect_android_platform(ndk_dir, target_api=31)
 
     print(f"Using SDK:       {sdk_dir}")
     print(f"Using NDK:       {ndk_dir} ({android_platform})")
     print(f"Using CMake:     {cmake_bin}")
     print(f"Using Ninja:     {ninja_bin}")
 
-    # Clean build directory if CMake cache is absent or belongs to a different project/toolchain
+    # Clean build directory if CMake cache is absent or belongs to a different project/toolchain/platform
     cache_path = os.path.join(BUILD_DIR, "CMakeCache.txt")
     if os.path.isdir(BUILD_DIR):
         stale = True
@@ -175,9 +178,13 @@ def main():
             with open(cache_path, "r", encoding="utf-8", errors="ignore") as f:
                 cache_text = f.read()
             norm_toolchain = toolchain.replace("\\", "/")
+            has_platform = bool(
+                re.search(rf"^ANDROID_PLATFORM:[^=]+={re.escape(android_platform)}$", cache_text, re.MULTILINE)
+            )
             if (
                 "CMAKE_PROJECT_NAME:STATIC=kuroko_native" in cache_text
                 and norm_toolchain in cache_text.replace("\\", "/")
+                and has_platform
             ):
                 stale = False
         if stale:
