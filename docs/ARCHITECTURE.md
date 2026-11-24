@@ -132,15 +132,15 @@ flowchart LR
 1. **彻底移除 C `dlopen`**：编译后审计确认 `zygisk/arm64-v8a.so` 的 `.dynsym` 中 **零 `dlopen`/`dlsym`/`dlerror`/`dlclose` 导入符号**，绝不再向 Zygisk 隔离命名空间引入副本。
 2. **主路径（`jni_plt`）**：
    - 在 `install_sensor_hooks(api, env, shm, out_status)` 中缓存 `JavaVM* g_jvm`，通过 `JNIEnv` 直接调用 **`java.lang.System.load("/system/lib64/libsensorservice.so")`**（由 `libnativeloader` 加载至 `system_server` 的 `default` 命名空间，与后续 `System.loadLibrary("android_servers")` 复用**唯一一份**内存实例；全程异常捕获、日志记录并 `ExceptionClear()`，绝不向 ART 抛异常）。
-   - 扫描 `/proc/self/maps` 严格匹配 `offset == 0 && perms[0] == 'r' && perms[3] == 'p'`（仅私有映射 `r--p`，自动避开 `lsplt` 生成的 `r--s` 共享备份与 `---p` 占位页）且路径匹配 `/libsensorservice.so` 的 `(base, dev, ino)`，调用 `api->pltHookRegister` + `api->pltHookCommit()` 挂上全部 8 个符号，记录 `base` 至 `g_patched_bases`，返回 `ok:jni_plt:mv=11,core=%d/5,disc=%d/3`。
+   - 扫描 `/proc/self/maps` 严格匹配 `offset == 0 && perms[0] == 'r' && perms[3] == 'p'`（仅私有映射 `r--p`，自动避开 `lsplt` 生成的 `r--s` 共享备份与 `---p` 占位页）且路径匹配 `/libsensorservice.so` 的 `(base, dev, ino)`；先通过 `parse_elf_plt_view()` + `scan_matched_plt_entries()` **预扫描本机 `.rela.plt`**，仅对**真实存在**的符号去重注册（每个逻辑 `HookSlot` 至多 1 条、总数 `<= 8`，绝不注册不存在的候选符号）；若未同时具备 `CONN_C1` 与 `SEND_EVENTS` 核心槽位则零注册直接安全退化为 `err:abi_unsupported`；`pltHookRegister` 绑定全局静态寿命数组 `g_plt_orig_slots[SPEC_COUNT]`，并在 `pltHookCommit()` 后**无条件**同步所有非空原函数指针至 `g_orig_*`（同时所有 20 个包装函数均经 `load_orig_for_slot()` 对 `g_plt_orig_slots` 兜底读取），记录 `base` 至 `g_patched_bases`，返回 `ok:jni_plt:mv=11,core=%d/5,disc=%d/3`。
 3. **自愈兜底路径（纯 C++ ARM64 ELF64 `.rela.plt` GOT 看门狗）**：
    - `module.cpp` 在 `shm_ != nullptr` 时**绝不调用 `DLCLOSE_MODULE_LIBRARY`**，保证 `StepInjectorThread` 持续驻留。
    - `StepInjectorThread` 按动态频率（开机前 30 秒：未挂钩时每 `50ms`、已挂钩时每 `500ms`；30 秒后每 `5s`）持续扫描 `/proc/self/maps` 中的 `r--p offset=0` `/libsensorservice.so` 基址数 `mp`。一旦检测到任何未在 `g_patched_bases` 中的新基址 `base`，立即执行 `patch_elf_got_at_base(base)`：
      - 校验 ELF64 魔数（`\x7fELF`、`ELFCLASS64`、`EM_AARCH64`），解析 `PT_LOAD` 计算 `load_bias`，解析 `PT_DYNAMIC` 提取 `DT_SYMTAB`、`DT_STRTAB`、`DT_STRSZ`（强校验 `strsz > 0` 且 `strtab[strsz - 1] == '\0'`）、`DT_JMPREL`、`DT_PLTRELSZ`（兼容 bionic 已重定位/未重定位两种 `d_ptr` 语义：`d_ptr >= base ? d_ptr : load_bias + d_ptr`）。
-     - 遍历 `R_AARCH64_JUMP_SLOT (1026)` 匹配全部 8 个符号；修补前校验 `slot` 处于可读私有 VMA，并对 `old_val` 做**重定位完成守卫**：若 `old_val == spec.hook_fn` 则跳过；若 `!old_val` 或 `old_val` **未指向 `PROT_EXEC` 可执行 VMA**，则置 `had_unresolved_slot = true` 延后至下一 tick 重试，彻底杜绝半重定位解引用引发 `system_server` `SIGSEGV`！
-     - 使用 `sysconf(_SC_PAGESIZE)`（兼容 4KB/16KB 页大小，支持跨页槽位）对目标页 `mprotect(orig_prot | PROT_WRITE)` -> 先原子存入对应 `std::atomic` `g_orig_*` -> `__atomic_store_n(slot, spec.hook_fn, __ATOMIC_RELEASE)` -> 恢复原始 `orig_prot`。
+     - 两阶段预检遍历 `R_AARCH64_JUMP_SLOT (1026)` 匹配 8 个逻辑槽位（20 条多版本候选符号）：先校验 `CONN_C1` + `SEND_EVENTS` 均存在且所有目标 `slot` 处于可读私有 VMA 并完成 `PROT_EXEC` 重定位守卫（若 `!old_val` 或未指向可执行 VMA 则置 `had_unresolved_slot = true` 延后至下一 tick 重试，若缺失核心槽位则直接标记跳过并上报 `err:abi_unsupported`，零部分改写），彻底杜绝半重定位或空原函数解引用引发 `system_server` `SIGSEGV`！
+     - 使用 `sysconf(_SC_PAGESIZE)`（兼容 4KB/16KB 页大小，支持跨页槽位）对目标页 `mprotect(orig_prot | PROT_WRITE)` -> 先原子写入 `g_plt_orig_slots[spec_idx]` 与对应 `std::atomic` `g_orig_*` -> `__atomic_store_n(slot, spec.hook_fn, __ATOMIC_RELEASE)` -> 恢复原始 `orig_prot`。
      - 修补成功后登记 `g_patched_bases` 并通过 JNI 更新 `kuroko.sensor.hook = "ok:got:mv=11,core=%d/5,disc=%d/3,maps=%d"`。
-   - 全部 8 个 `g_orig_*` 函数指针均为 `std::atomic`（`memory_order_acquire` 读取并判空），无并发竞态。
+   - 全部 20 个 `g_orig_*` 函数指针均为 `std::atomic`（配合 `g_plt_orig_slots[SPEC_COUNT]` 经 `memory_order_acquire` 双层读取并防递归校验），无并发竞态。
 
 ### 3.3 8 逻辑槽位纯 PLT/GOT 多版本候选符号表（Android 12–17 / `android-31`）与三层多句柄发现
 

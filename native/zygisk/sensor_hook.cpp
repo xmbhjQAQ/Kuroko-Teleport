@@ -137,6 +137,36 @@ int popcount_u32(uint32_t mask) {
     return __builtin_popcount(mask);
 }
 
+constexpr uint32_t kRequiredCoreMask = slot_bit(HookSlot::CONN_C1) | slot_bit(HookSlot::SEND_EVENTS);
+
+// Exact compile-time indices into kHookSpecs[] and static g_plt_orig_slots[]
+enum SpecIdx : size_t {
+    SPEC_CONN_C1_7VAL = 0,
+    SPEC_CONN_C1_7REF,
+    SPEC_CONN_C1_6VAL,
+    SPEC_CONN_C1_8VAL_I,
+    SPEC_CONN_C1_8REF_I,
+    SPEC_CONN_C1_9VAL_IB,
+    SPEC_CONN_C1_9VAL_II,
+    SPEC_CONN_C1_5NOMODE,
+    SPEC_CONN_C1_6NOMODE_ATTR,
+    SPEC_CONN_C1_6NOMODE_I,
+    SPEC_CONN_C1_7NOMODE_ATTR_I,
+    SPEC_ADD_SENSOR,
+    SPEC_REMOVE_SENSOR,
+    SPEC_SEND_EVENTS,
+    SPEC_CLEANUP_CONN,
+    SPEC_SENSOR_LIST_ADD_6,
+    SPEC_SENSOR_LIST_ADD_5,
+    SPEC_SENSOR_LIST_ADD_4,
+    SPEC_RECENT_LOGGER_C1,
+    SPEC_MI_SAVE_USAGE,
+    SPEC_COUNT
+};
+
+// Global static-lifetime PLT orig slots passed to api->pltHookRegister (NEVER stack-local!)
+void* g_plt_orig_slots[SPEC_COUNT] = {};
+
 // Original PLT/GOT function pointers (one dedicated std::atomic per exact AAPCS64 signature)
 using FnConnC1_7Val        = void* (*)(void*, const void*, uint32_t, int32_t, void*, bool, const void*, const void*);
 using FnConnC1_7Ref        = void* (*)(void*, const void*, uint32_t, int32_t, const void*, bool, const void*, const void*);
@@ -184,6 +214,39 @@ std::atomic<FnSensorListAdd4>      g_orig_sensor_list_add_4{nullptr};
 
 std::atomic<FnRecentLoggerC1>      g_orig_recent_logger_c1{nullptr};
 std::atomic<FnSaveSensorUsageItem> g_orig_save_sensor_usage_item{nullptr};
+
+// Lock-free orig loader with static g_plt_orig_slots[] fallback (eliminates mid-commit/partial-commit null orig)
+template <typename Fn>
+inline Fn load_orig_for_slot(std::atomic<Fn>& atomic_orig, size_t spec_idx, void* self_hook_fn) {
+    Fn fn = atomic_orig.load(std::memory_order_acquire);
+    if (fn) return fn;
+    void* raw = __atomic_load_n(&g_plt_orig_slots[spec_idx], __ATOMIC_ACQUIRE);
+    if (raw && raw != self_hook_fn) {
+        fn = reinterpret_cast<Fn>(raw);
+        atomic_orig.store(fn, std::memory_order_release);
+        return fn;
+    }
+    return nullptr;
+}
+
+bool has_any_conn_c1_orig() {
+    for (size_t idx = SPEC_CONN_C1_7VAL; idx <= SPEC_CONN_C1_7NOMODE_ATTR_I; ++idx) {
+        if (__atomic_load_n(&g_plt_orig_slots[idx], __ATOMIC_ACQUIRE) != nullptr) {
+            return true;
+        }
+    }
+    return g_orig_conn_c1_7val.load(std::memory_order_acquire) != nullptr ||
+           g_orig_conn_c1_7ref.load(std::memory_order_acquire) != nullptr ||
+           g_orig_conn_c1_6val.load(std::memory_order_acquire) != nullptr ||
+           g_orig_conn_c1_8val_i.load(std::memory_order_acquire) != nullptr ||
+           g_orig_conn_c1_8ref_i.load(std::memory_order_acquire) != nullptr ||
+           g_orig_conn_c1_9val_ib.load(std::memory_order_acquire) != nullptr ||
+           g_orig_conn_c1_9val_ii.load(std::memory_order_acquire) != nullptr ||
+           g_orig_conn_c1_5nomode.load(std::memory_order_acquire) != nullptr ||
+           g_orig_conn_c1_6nomode_attr.load(std::memory_order_acquire) != nullptr ||
+           g_orig_conn_c1_6nomode_i.load(std::memory_order_acquire) != nullptr ||
+           g_orig_conn_c1_7nomode_attr_i.load(std::memory_order_acquire) != nullptr;
+}
 
 // Runtime telemetry counters (published <= 1Hz to kuroko.sensor.diag)
 std::atomic<bool>     g_used_jni_plt{false};
@@ -352,7 +415,8 @@ void ensure_handle_recorded(int32_t handle, int32_t type) {
 // Tier 1 discovery: pure AOSP SensorList::add + RecentEventLogger::C1 capture all sensors at boot
 bool hook_sensor_list_add_6(void* self, int32_t handle, void* sp_iface,
                             bool is_debug, bool is_virtual, int32_t dev_id) {
-    auto orig = g_orig_sensor_list_add_6.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_sensor_list_add_6, SPEC_SENSOR_LIST_ADD_6,
+                                   reinterpret_cast<void*>(hook_sensor_list_add_6));
     if (!orig) return false;
     tls_pending_reg_handle = (handle >= 0) ? handle : -1;
     bool ok = orig(self, handle, sp_iface, is_debug, is_virtual, dev_id);
@@ -364,7 +428,8 @@ bool hook_sensor_list_add_6(void* self, int32_t handle, void* sp_iface,
 
 bool hook_sensor_list_add_5(void* self, int32_t handle, void* sp_iface,
                             bool is_debug, bool is_virtual) {
-    auto orig = g_orig_sensor_list_add_5.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_sensor_list_add_5, SPEC_SENSOR_LIST_ADD_5,
+                                   reinterpret_cast<void*>(hook_sensor_list_add_5));
     if (!orig) return false;
     tls_pending_reg_handle = (handle >= 0) ? handle : -1;
     bool ok = orig(self, handle, sp_iface, is_debug, is_virtual);
@@ -375,7 +440,8 @@ bool hook_sensor_list_add_5(void* self, int32_t handle, void* sp_iface,
 }
 
 bool hook_sensor_list_add_4(void* self, int32_t handle, void* sp_iface, bool is_debug) {
-    auto orig = g_orig_sensor_list_add_4.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_sensor_list_add_4, SPEC_SENSOR_LIST_ADD_4,
+                                   reinterpret_cast<void*>(hook_sensor_list_add_4));
     if (!orig) return false;
     tls_pending_reg_handle = (handle >= 0) ? handle : -1;
     bool ok = orig(self, handle, sp_iface, is_debug);
@@ -386,7 +452,8 @@ bool hook_sensor_list_add_4(void* self, int32_t handle, void* sp_iface, bool is_
 }
 
 void* hook_recent_logger_c1(void* self, int32_t sensor_type) {
-    auto orig = g_orig_recent_logger_c1.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_recent_logger_c1, SPEC_RECENT_LOGGER_C1,
+                                   reinterpret_cast<void*>(hook_recent_logger_c1));
     int32_t pending = tls_pending_reg_handle;
     tls_pending_reg_handle = -1;
     if (pending >= 0 && sensor_type > 0) {
@@ -402,7 +469,8 @@ void hook_save_sensor_usage_item(int32_t type, const void* str8_name, const void
     if (arg4 >= 0 && handle >= 0 && type > 0) {
         record_handle_type(handle, type);
     }
-    auto orig = g_orig_save_sensor_usage_item.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_save_sensor_usage_item, SPEC_MI_SAVE_USAGE,
+                                   reinterpret_cast<void*>(hook_save_sensor_usage_item));
     if (orig) orig(type, str8_name, str8_pkg, enable, arg4, handle);
 }
 
@@ -426,7 +494,8 @@ void register_conn_uid(void* self, uint32_t uid, const char* variant) {
 
 void* hook_conn_c1_7val(void* self, const void* sp_service, uint32_t uid, int32_t mode,
                         void* str8_pkg, bool has_access, const void* str16_op, const void* str16_attr) {
-    auto orig = g_orig_conn_c1_7val.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_conn_c1_7val, SPEC_CONN_C1_7VAL,
+                                   reinterpret_cast<void*>(hook_conn_c1_7val));
     void* ret = orig ? orig(self, sp_service, uid, mode, str8_pkg, has_access, str16_op, str16_attr) : self;
     register_conn_uid(self, uid, "7val");
     return ret;
@@ -434,7 +503,8 @@ void* hook_conn_c1_7val(void* self, const void* sp_service, uint32_t uid, int32_
 
 void* hook_conn_c1_7ref(void* self, const void* sp_service, uint32_t uid, int32_t mode,
                         const void* str8_pkg, bool has_access, const void* str16_op, const void* str16_attr) {
-    auto orig = g_orig_conn_c1_7ref.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_conn_c1_7ref, SPEC_CONN_C1_7REF,
+                                   reinterpret_cast<void*>(hook_conn_c1_7ref));
     void* ret = orig ? orig(self, sp_service, uid, mode, str8_pkg, has_access, str16_op, str16_attr) : self;
     register_conn_uid(self, uid, "7ref");
     return ret;
@@ -442,7 +512,8 @@ void* hook_conn_c1_7ref(void* self, const void* sp_service, uint32_t uid, int32_
 
 void* hook_conn_c1_6val(void* self, const void* sp_service, uint32_t uid, int32_t mode,
                         void* str8_pkg, bool has_access, const void* str16_op) {
-    auto orig = g_orig_conn_c1_6val.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_conn_c1_6val, SPEC_CONN_C1_6VAL,
+                                   reinterpret_cast<void*>(hook_conn_c1_6val));
     void* ret = orig ? orig(self, sp_service, uid, mode, str8_pkg, has_access, str16_op) : self;
     register_conn_uid(self, uid, "6val");
     return ret;
@@ -451,7 +522,8 @@ void* hook_conn_c1_6val(void* self, const void* sp_service, uint32_t uid, int32_
 void* hook_conn_c1_8val_i(void* self, const void* sp_service, uint32_t uid, int32_t mode,
                           void* str8_pkg, bool has_access, const void* str16_op, const void* str16_attr,
                           int32_t dev_id) {
-    auto orig = g_orig_conn_c1_8val_i.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_conn_c1_8val_i, SPEC_CONN_C1_8VAL_I,
+                                   reinterpret_cast<void*>(hook_conn_c1_8val_i));
     void* ret = orig ? orig(self, sp_service, uid, mode, str8_pkg, has_access, str16_op, str16_attr, dev_id) : self;
     register_conn_uid(self, uid, "8val_i");
     return ret;
@@ -460,7 +532,8 @@ void* hook_conn_c1_8val_i(void* self, const void* sp_service, uint32_t uid, int3
 void* hook_conn_c1_8ref_i(void* self, const void* sp_service, uint32_t uid, int32_t mode,
                           const void* str8_pkg, bool has_access, const void* str16_op, const void* str16_attr,
                           int32_t dev_id) {
-    auto orig = g_orig_conn_c1_8ref_i.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_conn_c1_8ref_i, SPEC_CONN_C1_8REF_I,
+                                   reinterpret_cast<void*>(hook_conn_c1_8ref_i));
     void* ret = orig ? orig(self, sp_service, uid, mode, str8_pkg, has_access, str16_op, str16_attr, dev_id) : self;
     register_conn_uid(self, uid, "8ref_i");
     return ret;
@@ -469,7 +542,8 @@ void* hook_conn_c1_8ref_i(void* self, const void* sp_service, uint32_t uid, int3
 void* hook_conn_c1_9val_ib(void* self, const void* sp_service, uint32_t uid, int32_t mode,
                            void* str8_pkg, bool has_access, const void* str16_op, const void* str16_attr,
                            int32_t a8, bool a9) {
-    auto orig = g_orig_conn_c1_9val_ib.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_conn_c1_9val_ib, SPEC_CONN_C1_9VAL_IB,
+                                   reinterpret_cast<void*>(hook_conn_c1_9val_ib));
     void* ret = orig ? orig(self, sp_service, uid, mode, str8_pkg, has_access, str16_op, str16_attr, a8, a9) : self;
     register_conn_uid(self, uid, "9val_ib");
     return ret;
@@ -478,7 +552,8 @@ void* hook_conn_c1_9val_ib(void* self, const void* sp_service, uint32_t uid, int
 void* hook_conn_c1_9val_ii(void* self, const void* sp_service, uint32_t uid, int32_t mode,
                            void* str8_pkg, bool has_access, const void* str16_op, const void* str16_attr,
                            int32_t a8, int32_t a9) {
-    auto orig = g_orig_conn_c1_9val_ii.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_conn_c1_9val_ii, SPEC_CONN_C1_9VAL_II,
+                                   reinterpret_cast<void*>(hook_conn_c1_9val_ii));
     void* ret = orig ? orig(self, sp_service, uid, mode, str8_pkg, has_access, str16_op, str16_attr, a8, a9) : self;
     register_conn_uid(self, uid, "9val_ii");
     return ret;
@@ -486,7 +561,8 @@ void* hook_conn_c1_9val_ii(void* self, const void* sp_service, uint32_t uid, int
 
 void* hook_conn_c1_5nomode(void* self, const void* sp_service, uint32_t uid,
                            void* str8_pkg, bool has_access, const void* str16_op) {
-    auto orig = g_orig_conn_c1_5nomode.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_conn_c1_5nomode, SPEC_CONN_C1_5NOMODE,
+                                   reinterpret_cast<void*>(hook_conn_c1_5nomode));
     void* ret = orig ? orig(self, sp_service, uid, str8_pkg, has_access, str16_op) : self;
     register_conn_uid(self, uid, "5nomode");
     return ret;
@@ -494,7 +570,8 @@ void* hook_conn_c1_5nomode(void* self, const void* sp_service, uint32_t uid,
 
 void* hook_conn_c1_6nomode_attr(void* self, const void* sp_service, uint32_t uid,
                                 void* str8_pkg, bool has_access, const void* str16_op, const void* str16_attr) {
-    auto orig = g_orig_conn_c1_6nomode_attr.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_conn_c1_6nomode_attr, SPEC_CONN_C1_6NOMODE_ATTR,
+                                   reinterpret_cast<void*>(hook_conn_c1_6nomode_attr));
     void* ret = orig ? orig(self, sp_service, uid, str8_pkg, has_access, str16_op, str16_attr) : self;
     register_conn_uid(self, uid, "6nomode_attr");
     return ret;
@@ -502,7 +579,8 @@ void* hook_conn_c1_6nomode_attr(void* self, const void* sp_service, uint32_t uid
 
 void* hook_conn_c1_6nomode_i(void* self, const void* sp_service, uint32_t uid,
                              void* str8_pkg, bool has_access, const void* str16_op, int32_t dev_id) {
-    auto orig = g_orig_conn_c1_6nomode_i.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_conn_c1_6nomode_i, SPEC_CONN_C1_6NOMODE_I,
+                                   reinterpret_cast<void*>(hook_conn_c1_6nomode_i));
     void* ret = orig ? orig(self, sp_service, uid, str8_pkg, has_access, str16_op, dev_id) : self;
     register_conn_uid(self, uid, "6nomode_i");
     return ret;
@@ -511,14 +589,16 @@ void* hook_conn_c1_6nomode_i(void* self, const void* sp_service, uint32_t uid,
 void* hook_conn_c1_7nomode_attr_i(void* self, const void* sp_service, uint32_t uid,
                                   void* str8_pkg, bool has_access, const void* str16_op, const void* str16_attr,
                                   int32_t dev_id) {
-    auto orig = g_orig_conn_c1_7nomode_attr_i.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_conn_c1_7nomode_attr_i, SPEC_CONN_C1_7NOMODE_ATTR_I,
+                                   reinterpret_cast<void*>(hook_conn_c1_7nomode_attr_i));
     void* ret = orig ? orig(self, sp_service, uid, str8_pkg, has_access, str16_op, str16_attr, dev_id) : self;
     register_conn_uid(self, uid, "7nomode_attr_i");
     return ret;
 }
 
 bool hook_add_sensor(void* self, int32_t handle) {
-    auto orig = g_orig_add_sensor.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_add_sensor, SPEC_ADD_SENSOR,
+                                   reinterpret_cast<void*>(hook_add_sensor));
     if (!orig) return false;
     bool ok = orig(self, handle);
     g_cnt_add.fetch_add(1, std::memory_order_relaxed);
@@ -555,7 +635,8 @@ bool hook_add_sensor(void* self, int32_t handle) {
 }
 
 bool hook_remove_sensor(void* self, int32_t handle) {
-    auto orig = g_orig_remove_sensor.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_remove_sensor, SPEC_REMOVE_SENSOR,
+                                   reinterpret_cast<void*>(hook_remove_sensor));
     if (!orig) return false;
     bool ok = orig(self, handle);
     if (self) {
@@ -574,7 +655,8 @@ void hook_cleanup_conn(void* service, void* conn) {
         std::unique_lock<std::shared_mutex> lk(g_state_mu);
         g_conns.erase(conn);
     }
-    auto orig = g_orig_cleanup_conn.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_cleanup_conn, SPEC_CLEANUP_CONN,
+                                   reinterpret_cast<void*>(hook_cleanup_conn));
     if (orig) orig(service, conn);
 }
 
@@ -636,7 +718,8 @@ bool rewrite_imu_event(SensorsEvent& ev, const KurokoShm& snap) {
 
 int32_t hook_send_events(void* self, const SensorsEvent* buffer, size_t count,
                          SensorsEvent* scratch, const void* map_flush) {
-    auto orig = g_orig_send_events.load(std::memory_order_acquire);
+    auto orig = load_orig_for_slot(g_orig_send_events, SPEC_SEND_EVENTS,
+                                   reinterpret_cast<void*>(hook_send_events));
     if (!orig) return 0;
     g_cnt_send.fetch_add(1, std::memory_order_relaxed);
     if (!self || !buffer || count == 0) {
@@ -866,6 +949,7 @@ const HookSpec kHookSpecs[] = {
 };
 
 constexpr size_t kNumHookSpecs = sizeof(kHookSpecs) / sizeof(kHookSpecs[0]);
+static_assert(kNumHookSpecs == SPEC_COUNT, "kHookSpecs must stay aligned 1:1 with SpecIdx / g_plt_orig_slots");
 
 bool ends_with(const char* str, const char* suffix) {
     size_t slen = std::strlen(str);
@@ -946,8 +1030,15 @@ struct PatchResult {
     uint32_t core_mask = 0;
     uint32_t disc_mask = 0;
     bool had_unresolved_slot = false;
+    bool abi_unsupported = false;
     int core_hits() const { return popcount_u32(core_mask); }
     int disc_hits() const { return popcount_u32(disc_mask); }
+};
+
+struct MatchedPltEntry {
+    size_t spec_idx = 0;
+    uintptr_t slot_addr = 0;
+    int orig_prot = 0;
 };
 
 struct ElfPltView {
@@ -1100,13 +1191,55 @@ void log_unmatched_oem_symbols_once(uintptr_t base, const ElfPltView& view, cons
     }
 }
 
-void log_unmatched_oem_symbols_for_base(uintptr_t base, uint32_t core_mask, uint32_t disc_mask) {
-    const bool miss_c1 = (core_mask & slot_bit(HookSlot::CONN_C1)) == 0;
-    const bool miss_list = (disc_mask & slot_bit(HookSlot::SENSOR_LIST_ADD)) == 0;
-    if (!miss_c1 && !miss_list) return;
-    auto vmas = snapshot_readable_private_vmas();
-    ElfPltView view = parse_elf_plt_view(base, vmas);
-    log_unmatched_oem_symbols_once(base, view, vmas, core_mask, disc_mask);
+// Pre-filter .rela.plt for exact kHookSpecs symbols present in this ELF, max 1 entry per HookSlot (<= 8 total)
+void scan_matched_plt_entries(const ElfPltView& view, const std::vector<VmaRange>& vmas,
+                              std::vector<MatchedPltEntry>* out_entries,
+                              uint32_t* out_core_mask, uint32_t* out_disc_mask) {
+    out_entries->clear();
+    *out_core_mask = 0;
+    *out_disc_mask = 0;
+    if (!view.valid) return;
+
+    uint32_t seen_core = 0;
+    uint32_t seen_disc = 0;
+    for (size_t i = 0; i < view.rela_count; ++i) {
+        if (ELF64_R_TYPE(view.relas[i].r_info) != R_AARCH64_JUMP_SLOT) continue;
+        uint32_t sym_idx = ELF64_R_SYM(view.relas[i].r_info);
+        uintptr_t sym_entry_addr = view.symtab_addr + static_cast<uintptr_t>(sym_idx) * sizeof(Elf64_Sym);
+        if (!find_vma(vmas, sym_entry_addr, sizeof(Elf64_Sym))) continue;
+
+        uint32_t st_name = view.symtab[sym_idx].st_name;
+        if (st_name >= view.strsz) continue;
+        const char* sym_name = view.strtab + st_name;
+
+        for (size_t s = 0; s < kNumHookSpecs; ++s) {
+            if (std::strcmp(sym_name, kHookSpecs[s].symbol) != 0) continue;
+
+            const bool core = is_core_slot(kHookSpecs[s].slot);
+            const uint32_t bit = slot_bit(kHookSpecs[s].slot);
+            if ((core ? (seen_core & bit) : (seen_disc & bit)) != 0) {
+                break; // deduplicated: at most 1 symbol per HookSlot
+            }
+
+            uintptr_t slot_addr = view.load_bias + static_cast<uintptr_t>(view.relas[i].r_offset);
+            int orig_prot = 0;
+            if (!find_vma(vmas, slot_addr, sizeof(void*), &orig_prot)) {
+                LOGW("GOT slot %p for %s not in readable private VMA; skipping",
+                     reinterpret_cast<void*>(slot_addr), kHookSpecs[s].symbol);
+                break;
+            }
+
+            out_entries->push_back(MatchedPltEntry{s, slot_addr, orig_prot});
+            if (core) {
+                seen_core |= bit;
+            } else {
+                seen_disc |= bit;
+            }
+            break;
+        }
+    }
+    *out_core_mask = seen_core;
+    *out_disc_mask = seen_disc;
 }
 
 // Pure C++ ARM64 ELF64 .rela.plt GOT patcher for self-healing on any newly-loaded libsensorservice.so
@@ -1118,79 +1251,122 @@ PatchResult patch_elf_got_at_base(uintptr_t base) {
         return pr;
     }
 
+    std::vector<MatchedPltEntry> matched;
+    uint32_t avail_core = 0;
+    uint32_t avail_disc = 0;
+    scan_matched_plt_entries(view, vmas, &matched, &avail_core, &avail_disc);
+
+    // Pre-flight core gate (Stage A): require both CONN_C1 and SEND_EVENTS present (or already stored)
+    const bool has_c1_sym = ((avail_core & slot_bit(HookSlot::CONN_C1)) != 0) || has_any_conn_c1_orig();
+    const bool has_send_sym =
+        ((avail_core & slot_bit(HookSlot::SEND_EVENTS)) != 0) ||
+        (load_orig_for_slot(g_orig_send_events, SPEC_SEND_EVENTS,
+                            reinterpret_cast<void*>(hook_send_events)) != nullptr);
+    if (!has_c1_sym || !has_send_sym) {
+        pr.abi_unsupported = true;
+        log_unmatched_oem_symbols_once(base, view, vmas, avail_core, avail_disc);
+        return pr;
+    }
+
+    // Pre-flight relocation readiness check (Stage B): never partially patch if core relocations aren't resolved yet
+    struct ReadyEntry {
+        MatchedPltEntry entry;
+        void* old_val = nullptr;
+        bool already_hooked = false;
+    };
+    std::vector<ReadyEntry> ready;
+    ready.reserve(matched.size());
+
+    uint32_t ready_core = 0;
+    for (const auto& e : matched) {
+        const auto& spec = kHookSpecs[e.spec_idx];
+        auto** slot = reinterpret_cast<void**>(e.slot_addr);
+        void* old_val = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
+
+        if (old_val == spec.hook_fn) {
+            // Already patched: still recover orig from g_plt_orig_slots[] if needed
+            void* saved_plt = __atomic_load_n(&g_plt_orig_slots[e.spec_idx], __ATOMIC_ACQUIRE);
+            if (saved_plt && saved_plt != spec.hook_fn) {
+                spec.store_orig(saved_plt);
+            }
+            ready.push_back(ReadyEntry{e, old_val, true});
+            if (is_core_slot(spec.slot)) {
+                ready_core |= slot_bit(spec.slot);
+            }
+            continue;
+        }
+
+        int tgt_prot = 0;
+        if (!old_val ||
+            !find_vma(vmas, reinterpret_cast<uintptr_t>(old_val), 4, &tgt_prot) ||
+            (tgt_prot & PROT_EXEC) == 0) {
+            // Linker relocation not finished yet (null or unrelocated .plt stub vaddr); retry next tick
+            pr.had_unresolved_slot = true;
+            continue;
+        }
+
+        ready.push_back(ReadyEntry{e, old_val, false});
+        if (is_core_slot(spec.slot)) {
+            ready_core |= slot_bit(spec.slot);
+        }
+    }
+
+    const bool c1_ready = ((ready_core & slot_bit(HookSlot::CONN_C1)) != 0) || has_any_conn_c1_orig();
+    const bool send_ready =
+        ((ready_core & slot_bit(HookSlot::SEND_EVENTS)) != 0) ||
+        (load_orig_for_slot(g_orig_send_events, SPEC_SEND_EVENTS,
+                            reinterpret_cast<void*>(hook_send_events)) != nullptr);
+    if (!c1_ready || !send_ready) {
+        pr.had_unresolved_slot = true;
+        return pr;
+    }
+
     long page_size_l = sysconf(_SC_PAGESIZE);
     size_t page_size = (page_size_l > 0) ? static_cast<size_t>(page_size_l) : 4096u;
 
-    for (size_t i = 0; i < view.rela_count; ++i) {
-        if (ELF64_R_TYPE(view.relas[i].r_info) != R_AARCH64_JUMP_SLOT) continue;
-        uint32_t sym_idx = ELF64_R_SYM(view.relas[i].r_info);
-        uintptr_t sym_entry_addr = view.symtab_addr + static_cast<uintptr_t>(sym_idx) * sizeof(Elf64_Sym);
-        if (!find_vma(vmas, sym_entry_addr, sizeof(Elf64_Sym))) continue;
+    for (const auto& r : ready) {
+        const auto& e = r.entry;
+        const auto& spec = kHookSpecs[e.spec_idx];
 
-        uint32_t st_name = view.symtab[sym_idx].st_name;
-        if (st_name >= view.strsz) continue;
-        const char* sym_name = view.strtab + st_name;
-
-        for (const auto& spec : kHookSpecs) {
-            if (std::strcmp(sym_name, spec.symbol) != 0) continue;
-
-            uintptr_t slot_addr = view.load_bias + static_cast<uintptr_t>(view.relas[i].r_offset);
-            int orig_prot = 0;
-            if (!find_vma(vmas, slot_addr, sizeof(void*), &orig_prot)) {
-                LOGW("GOT slot %p for %s not in readable private VMA; skipping",
-                     reinterpret_cast<void*>(slot_addr), spec.symbol);
-                continue;
-            }
-
-            auto** slot = reinterpret_cast<void**>(slot_addr);
-            void* old_val = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
-            if (old_val == spec.hook_fn) {
-                if (is_core_slot(spec.slot)) {
-                    pr.core_mask |= slot_bit(spec.slot);
-                } else {
-                    pr.disc_mask |= slot_bit(spec.slot);
-                }
-                break;
-            }
-            int tgt_prot = 0;
-            if (!old_val ||
-                !find_vma(vmas, reinterpret_cast<uintptr_t>(old_val), 4, &tgt_prot) ||
-                (tgt_prot & PROT_EXEC) == 0) {
-                // Linker relocation not finished yet (null or unrelocated .plt stub vaddr); retry next tick
-                pr.had_unresolved_slot = true;
-                break;
-            }
-
-            uintptr_t page_start = slot_addr & ~static_cast<uintptr_t>(page_size - 1);
-            size_t prot_len = ((slot_addr + sizeof(void*)) > (page_start + page_size))
-                              ? (page_size * 2) : page_size;
-
-            bool changed_prot = false;
-            if ((orig_prot & PROT_WRITE) == 0) {
-                if (mprotect(reinterpret_cast<void*>(page_start), prot_len, orig_prot | PROT_WRITE) != 0) {
-                    LOGW("mprotect RW failed for %s at %p: %s",
-                         spec.symbol, reinterpret_cast<void*>(page_start), strerror(errno));
-                    break;
-                }
-                changed_prot = true;
-            }
-
-            // Store real original pointer BEFORE swapping GOT slot so any caller entering hook_fn sees it
-            spec.store_orig(old_val);
-            __atomic_store_n(slot, spec.hook_fn, __ATOMIC_RELEASE);
-
-            if (changed_prot) {
-                mprotect(reinterpret_cast<void*>(page_start), prot_len, orig_prot);
-            }
-
+        if (r.already_hooked) {
             if (is_core_slot(spec.slot)) {
                 pr.core_mask |= slot_bit(spec.slot);
             } else {
                 pr.disc_mask |= slot_bit(spec.slot);
             }
-            LOGI("elf_got matched [%s]: %s -> orig=%p", spec.label, spec.symbol, old_val);
-            break;
+            continue;
         }
+
+        uintptr_t page_start = e.slot_addr & ~static_cast<uintptr_t>(page_size - 1);
+        size_t prot_len = ((e.slot_addr + sizeof(void*)) > (page_start + page_size))
+                          ? (page_size * 2) : page_size;
+
+        bool changed_prot = false;
+        if ((e.orig_prot & PROT_WRITE) == 0) {
+            if (mprotect(reinterpret_cast<void*>(page_start), prot_len, e.orig_prot | PROT_WRITE) != 0) {
+                LOGW("mprotect RW failed for %s at %p: %s",
+                     spec.symbol, reinterpret_cast<void*>(page_start), strerror(errno));
+                continue;
+            }
+            changed_prot = true;
+        }
+
+        // Store real original pointer into BOTH static slot and atomic orig BEFORE swapping GOT slot
+        __atomic_store_n(&g_plt_orig_slots[e.spec_idx], r.old_val, __ATOMIC_RELEASE);
+        spec.store_orig(r.old_val);
+        auto** slot = reinterpret_cast<void**>(e.slot_addr);
+        __atomic_store_n(slot, spec.hook_fn, __ATOMIC_RELEASE);
+
+        if (changed_prot) {
+            mprotect(reinterpret_cast<void*>(page_start), prot_len, e.orig_prot);
+        }
+
+        if (is_core_slot(spec.slot)) {
+            pr.core_mask |= slot_bit(spec.slot);
+        } else {
+            pr.disc_mask |= slot_bit(spec.slot);
+        }
+        LOGI("elf_got matched [%s]: %s -> orig=%p", spec.label, spec.symbol, r.old_val);
     }
 
     if (!pr.had_unresolved_slot) {
@@ -1251,7 +1427,8 @@ void step_injector_loop() {
         uint64_t now_ns = now_boot_ns();
 
         // 1. Self-healing /proc/self/maps watchdog for any new libsensorservice.so base
-        bool hooked = (g_orig_send_events.load(std::memory_order_acquire) != nullptr);
+        bool hooked = (load_orig_for_slot(g_orig_send_events, SPEC_SEND_EVENTS,
+                                          reinterpret_cast<void*>(hook_send_events)) != nullptr);
         uint64_t elapsed_ms = (now_ns >= start_ns) ? ((now_ns - start_ns) / 1000000ULL) : 0ULL;
         uint64_t scan_interval_ns = (elapsed_ms < 30000ULL)
             ? (hooked ? 500000000ULL : 50000000ULL)
@@ -1272,8 +1449,22 @@ void step_injector_loop() {
                 if (already_patched) continue;
 
                 PatchResult pr = patch_elf_got_at_base(m.base);
+                if (pr.abi_unsupported) {
+                    {
+                        std::lock_guard<std::mutex> plk(g_patch_mu);
+                        g_patched_bases.insert(m.base);
+                    }
+                    if (!hooked && thr_env) {
+                        set_java_system_property_jni(thr_env, "kuroko.sensor.hook", "err:abi_unsupported");
+                    }
+                    LOGW("ELF64 GOT pre-flight rejected unsupported libsensorservice.so base=0x%lx (skipped safely)",
+                         static_cast<unsigned long>(m.base));
+                    last_diag_ns = 0;
+                    continue;
+                }
                 if (pr.core_mask != 0 &&
-                    g_orig_send_events.load(std::memory_order_acquire) != nullptr &&
+                    load_orig_for_slot(g_orig_send_events, SPEC_SEND_EVENTS,
+                                       reinterpret_cast<void*>(hook_send_events)) != nullptr &&
                     !pr.had_unresolved_slot) {
                     {
                         std::lock_guard<std::mutex> plk(g_patch_mu);
@@ -1310,7 +1501,8 @@ void step_injector_loop() {
         }
 
         // 3. 40Hz active synthetic STEP_DETECTOR & STEP_COUNTER pump
-        auto orig_send = g_orig_send_events.load(std::memory_order_acquire);
+        auto orig_send = load_orig_for_slot(g_orig_send_events, SPEC_SEND_EVENTS,
+                                            reinterpret_cast<void*>(hook_send_events));
         KurokoShm snap{};
         if (orig_send && read_fresh_snapshot(&snap) &&
             (snap.global_flags & KUROKO_FLAG_STEP_SPOOF) != 0) {
@@ -1463,57 +1655,101 @@ bool install_sensor_hooks(zygisk::Api* api, JNIEnv* env, const KurokoShm* shm, s
     LOGI("install_sensor_hooks: System.load=%d maps_found=%zu", loaded_via_jni ? 1 : 0, maps.size());
 
     bool hooked_now = false;
+    bool abi_unsupported = false;
     if (api && !maps.empty()) {
-        void* plt_orig[kNumHookSpecs] = {};
-        for (size_t i = 0; i < kNumHookSpecs; ++i) {
-            api->pltHookRegister(
-                maps[0].dev, maps[0].ino,
-                kHookSpecs[i].symbol,
-                kHookSpecs[i].hook_fn,
-                &plt_orig[i]);
-        }
+        // Pre-filter .rela.plt BEFORE any pltHookRegister call (ZERO nonexistent symbols registered!)
+        auto vmas = snapshot_readable_private_vmas();
+        ElfPltView view = parse_elf_plt_view(maps[0].base, vmas);
+        if (view.valid) {
+            std::vector<MatchedPltEntry> matched;
+            uint32_t avail_core = 0;
+            uint32_t avail_disc = 0;
+            scan_matched_plt_entries(view, vmas, &matched, &avail_core, &avail_disc);
 
-        if (api->pltHookCommit()) {
-            uint32_t core_mask = 0;
-            uint32_t disc_mask = 0;
-            for (size_t i = 0; i < kNumHookSpecs; ++i) {
-                if (plt_orig[i] && plt_orig[i] != kHookSpecs[i].hook_fn) {
-                    kHookSpecs[i].store_orig(plt_orig[i]);
-                    if (is_core_slot(kHookSpecs[i].slot)) {
-                        core_mask |= slot_bit(kHookSpecs[i].slot);
-                    } else {
-                        disc_mask |= slot_bit(kHookSpecs[i].slot);
-                    }
-                    LOGI("jni_plt matched [%s]: %s -> orig=%p",
-                         kHookSpecs[i].label, kHookSpecs[i].symbol, plt_orig[i]);
+            if ((avail_core & kRequiredCoreMask) != kRequiredCoreMask) {
+                // Pre-flight core gate failed: DO NOT register any PLT hooks so system_server stays 100% alive
+                abi_unsupported = true;
+                log_unmatched_oem_symbols_once(maps[0].base, view, vmas, avail_core, avail_disc);
+                LOGW("install_sensor_hooks: pre-flight core gate failed (core_mask=0x%x disc_mask=0x%x); "
+                     "skipping PLT hooks cleanly",
+                     avail_core, avail_disc);
+            } else {
+                LOGI("install_sensor_hooks: pre-filtered %zu present .rela.plt symbol(s) "
+                     "(avail core=%d/5 disc=%d/3)",
+                     matched.size(), popcount_u32(avail_core), popcount_u32(avail_disc));
+                for (const auto& e : matched) {
+                    api->pltHookRegister(
+                        maps[0].dev, maps[0].ino,
+                        kHookSpecs[e.spec_idx].symbol,
+                        kHookSpecs[e.spec_idx].hook_fn,
+                        &g_plt_orig_slots[e.spec_idx]);
                 }
-            }
-            int core_hits = popcount_u32(core_mask);
-            int disc_hits = popcount_u32(disc_mask);
-            LOGI("jni_plt committed on libsensorservice.so (maps=%zu): core=%d/5 (mask=0x%x) disc=%d/3 (mask=0x%x)",
-                 maps.size(), core_hits, core_mask, disc_hits, disc_mask);
 
-            if (g_orig_send_events.load(std::memory_order_acquire) != nullptr) {
-                {
-                    std::lock_guard<std::mutex> plk(g_patch_mu);
-                    for (const auto& m : maps) {
-                        g_patched_bases.insert(m.base);
+                bool committed = api->pltHookCommit();
+
+                // UNCONDITIONALLY sync every populated static g_plt_orig_slots[] entry into g_orig_*
+                // EVEN IF committed == false (prevents null orig if lsplt patched a subset before returning false!)
+                uint32_t core_mask = 0;
+                uint32_t disc_mask = 0;
+                for (const auto& e : matched) {
+                    const auto& spec = kHookSpecs[e.spec_idx];
+                    void* orig_p = __atomic_load_n(&g_plt_orig_slots[e.spec_idx], __ATOMIC_ACQUIRE);
+                    if (orig_p && orig_p != spec.hook_fn) {
+                        spec.store_orig(orig_p);
+                        if (is_core_slot(spec.slot)) {
+                            core_mask |= slot_bit(spec.slot);
+                        } else {
+                            disc_mask |= slot_bit(spec.slot);
+                        }
+                        LOGI("jni_plt matched [%s] (committed=%d): %s -> orig=%p",
+                             spec.label, committed ? 1 : 0, spec.symbol, orig_p);
                     }
                 }
-                g_used_jni_plt.store(true, std::memory_order_relaxed);
-                record_matched_slots(core_mask, disc_mask);
-                log_unmatched_oem_symbols_for_base(maps[0].base, core_mask, disc_mask);
+                int core_hits = popcount_u32(core_mask);
+                int disc_hits = popcount_u32(disc_mask);
+                LOGI("jni_plt commit=%d on libsensorservice.so (maps=%zu): core=%d/5 (mask=0x%x) disc=%d/3 (mask=0x%x)",
+                     committed ? 1 : 0, maps.size(), core_hits, core_mask, disc_hits, disc_mask);
 
-                char summary[64];
-                std::snprintf(summary, sizeof(summary),
-                              "ok:jni_plt:mv=%d,core=%d/5,disc=%d/3",
-                              KUROKO_MODULE_VERSION_CODE, core_hits, disc_hits);
-                set_status(summary);
-                hooked_now = true;
+                if (core_mask != 0 || disc_mask != 0) {
+                    record_matched_slots(core_mask, disc_mask);
+                }
+
+                if (committed && (core_mask & kRequiredCoreMask) == kRequiredCoreMask) {
+                    {
+                        std::lock_guard<std::mutex> plk(g_patch_mu);
+                        for (const auto& m : maps) {
+                            if (m.dev == maps[0].dev && m.ino == maps[0].ino) {
+                                g_patched_bases.insert(m.base);
+                            }
+                        }
+                    }
+                    g_used_jni_plt.store(true, std::memory_order_relaxed);
+                    log_unmatched_oem_symbols_once(maps[0].base, view, vmas, core_mask, disc_mask);
+
+                    char summary[64];
+                    std::snprintf(summary, sizeof(summary),
+                                  "ok:jni_plt:mv=%d,core=%d/5,disc=%d/3",
+                                  KUROKO_MODULE_VERSION_CODE, core_hits, disc_hits);
+                    set_status(summary);
+                    hooked_now = true;
+                } else {
+                    LOGW("jni_plt incomplete (committed=%d core_mask=0x%x); deferring remaining slots to ELF64 GOT watchdog",
+                         committed ? 1 : 0, core_mask);
+                }
             }
         } else {
-            LOGW("jni_plt pltHookCommit() failed; falling back to self-healing ELF64 GOT watchdog");
+            LOGW("install_sensor_hooks: failed to parse ELF64 .rela.plt at base=0x%lx; deferring to GOT watchdog",
+                 static_cast<unsigned long>(maps[0].base));
         }
+    }
+
+    if (abi_unsupported) {
+        set_status("err:abi_unsupported");
+        if (env) {
+            std::string init_diag = build_diag_string();
+            set_java_system_property_jni(env, "kuroko.sensor.diag", init_diag.c_str());
+        }
+        return false;
     }
 
     if (!hooked_now) {
@@ -1527,7 +1763,7 @@ bool install_sensor_hooks(zygisk::Api* api, JNIEnv* env, const KurokoShm* shm, s
         set_java_system_property_jni(env, "kuroko.sensor.diag", init_diag.c_str());
     }
 
-    // Always launch StepInjectorThread (doubles as self-healing ELF64 GOT watchdog for any new maps)
+    // Launch StepInjectorThread (doubles as self-healing ELF64 GOT watchdog for any new maps)
     if (!g_injector_started.exchange(true)) {
         std::thread(step_injector_loop).detach();
     }
