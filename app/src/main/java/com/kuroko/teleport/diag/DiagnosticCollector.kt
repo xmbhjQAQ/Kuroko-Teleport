@@ -80,8 +80,9 @@ data class DiagnosticSnapshot(
     val apkInstalledProp: String,
     val daemonPids: String,
     val portListening: Boolean,
-    val propSensorHook: String,
-    val propSensorDiag: String,
+    val lsposedSensorHook: String,
+    val sensorServiceInstances: Int,
+    val sensorServiceVmaCount: Int,
     val sensorServiceMaps: String,
     val daemonLog: String,
     val lsposedLog: String,
@@ -120,8 +121,43 @@ object DiagnosticCollector {
     private val EMAIL_REGEX = Regex("""\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b""")
 
     private val AVC_DENIED_REGEX = Regex("""(?i)\bavc:\s*denied\b""")
-    private val AVC_RELEVANT_REGEX = Regex("""(?i)(kuroko|memfd|sensorservice|location)""")
-    private val LOGCAT_WARN_ERR_REGEX = Regex("""(?:\s[WEF]\s|\bavc:\s*denied\b)""", RegexOption.IGNORE_CASE)
+    private val AVC_UI_SANDBOX_SRC_REGEX = Regex(
+        """(?i)(?:\bscontext=u:r:untrusted_app[a-z0-9_]*:|\sRenderThread\s*:)"""
+    )
+    private val AVC_UI_GPU_NOISE_TARGET_REGEX = Regex(
+        """(?i)(?:proc_perfmgr|hal_perf|vendor_hal_perf|kgsl|perfmgr|gpu)"""
+    )
+    private val AVC_ENGINE_SCONTEXT_REGEX = Regex(
+        """(?i)\bscontext=u:r:(?:system_server|zygote|radio|su|magisk|init|kuroko)[a-z0-9_]*:"""
+    )
+    private val AVC_ENGINE_SUBJECT_REGEX = Regex(
+        """(?i)(?:kuroko|memfd|tmpfs|adb_data_file|sensorservice|binder|location|unix_stream_socket)"""
+    )
+    private val AVC_DIRECT_TARGET_REGEX = Regex(
+        """(?i)(?:\btcontext=[^\s]*(?:kuroko|memfd|adb_data_file|sensorservice)|\bname="[^"]*(?:kuroko|memfd|adb_data_file|sensorservice)[^"]*")"""
+    )
+    private val FOREIGN_LSPOSED_HEADER_REGEX = Regex(
+        """(?:\)\[|\[)([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)+),"""
+    )
+    private val LSPOSED_SENSOR_HOOK_REGEX = Regex("""\bkuroko\.sensor\.hook=([^\s()]+)""")
+    private val THREADTIME_LINE_REGEX = Regex(
+        """^\s*\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3}\s+(\d+)\s+\d+\s+([VDIWEFA])\s+([^:]+?)\s*:"""
+    )
+    private val NOISY_UI_OEM_TAGS = setOf(
+        "MIUIInput",
+        "PerfBoostPolicy",
+        "MiInputBoostRt",
+        "SchedBoostThread",
+        "PackageConfigPersister",
+        "ViewRootImpl",
+        "InputTransport",
+        "BLASTBufferQueue",
+        "BufferQueueProducer",
+        "OpenGLRenderer",
+        "Hwui",
+        "SurfaceComposerClient",
+        "InsetsController"
+    )
     private val GENERIC_WARN_ERR_REGEX = Regex(
         """(\[(?:W|E|WARN|ERROR)\]|(?i)\b(?:WARN|WARNING|ERR|ERROR|FAIL|FAILED|EXCEPTION|DENIED|ABORT|TIMEOUT|MISMATCH|TRIPPED)\b)"""
     )
@@ -149,10 +185,6 @@ echo "===DAEMON_PID==="
 pidof kuroko_daemon 2>/dev/null || true
 echo "===TCP_LISTEN==="
 grep -i ":705D " /proc/net/tcp /proc/net/tcp6 2>/dev/null || true
-echo "===PROP_SENSOR_HOOK==="
-getprop kuroko.sensor.hook 2>/dev/null || true
-echo "===PROP_SENSOR_DIAG==="
-getprop kuroko.sensor.diag 2>/dev/null || true
 echo "===SENSOR_MAPS==="
 set -- $(pidof system_server 2>/dev/null)
 SS_PID="${'$'}1"
@@ -164,7 +196,8 @@ if [ -r /data/adb/kuroko/daemon.log ]; then
   tail -c 131072 /data/adb/kuroko/daemon.log 2>/dev/null || true
 fi
 echo "===LOGCAT==="
-logcat -d -v threadtime -t 2500 2>/dev/null | grep -E "KurokoDaemon|KurokoZygisk|KurokoSensorHook|Kuroko-|com\.kuroko\.teleport|avc:[[:space:]]*denied" || true
+logcat -d -v threadtime -s KurokoDaemon:* KurokoZygisk:* KurokoSensorHook:* 2>/dev/null | tail -n 300 || true
+logcat -d -v threadtime -t 4000 2>/dev/null | grep -E "avc:[[:space:]]*denied|AndroidRuntime|FATAL EXCEPTION|com\.kuroko\.teleport" | tail -n 300 || true
 echo "===LSPOSED_LOG==="
 LSP_FILES=$(ls -1t /data/adb/lspd/log/modules_*.log 2>/dev/null | head -n 2)
 if [ -z "${'$'}LSP_FILES" ]; then
@@ -172,7 +205,7 @@ if [ -z "${'$'}LSP_FILES" ]; then
 fi
 for f in ${'$'}LSP_FILES; do
   if [ -r "${'$'}f" ]; then
-    tail -c 262144 "${'$'}f" 2>/dev/null | grep -E "Kuroko-|com\.kuroko\.teleport" || true
+    tail -c 262144 "${'$'}f" 2>/dev/null | grep -E "\[com\.kuroko\.teleport,|Kuroko-" || true
   fi
 done
 echo "===END==="
@@ -223,16 +256,18 @@ echo "===END==="
         val portListening = tcpListenRaw.lineSequence().any { it.contains(":705D", ignoreCase = true) }
 
         val sensorMapsSanitized = sanitizeSensorMaps(sections["SENSOR_MAPS"].orEmpty())
+        val (sensorInstances, sensorVmaCount) = parseSensorMapStats(sensorMapsSanitized)
 
         val rawDaemonLog = sections["DAEMON_LOG"].orEmpty().trimEnd()
         val redactedDaemonLog = redactBase(rawDaemonLog, cleanKeys)
 
         val filteredLogcatLines = filterWhitelistedLogcat(sections["LOGCAT"].orEmpty())
-        val avcCount = filteredLogcatLines.count { AVC_DENIED_REGEX.containsMatchIn(it) }
+        val avcCount = filteredLogcatLines.count { isEngineRelevantAvc(it) }
         val redactedLogcat = redactBase(filteredLogcatLines.joinToString("\n"), cleanKeys)
 
         val filteredLsposedLines = filterWhitelistedLsposed(sections["LSPOSED_LOG"].orEmpty())
         val redactedLsposed = redactBase(filteredLsposedLines.joinToString("\n"), cleanKeys)
+        val lsposedSensorHook = extractLsposedSensorHook(redactedLsposed)
 
         val redactedAppEvents = redactBase(AppLogBuffer.dumpText(errorsOnly = false), cleanKeys)
 
@@ -268,8 +303,9 @@ echo "===END==="
             apkInstalledProp = redactBase(sections["APK_PROP"].orEmpty().trim(), cleanKeys),
             daemonPids = sections["DAEMON_PID"].orEmpty().trim(),
             portListening = portListening,
-            propSensorHook = redactBase(sections["PROP_SENSOR_HOOK"].orEmpty().trim(), cleanKeys),
-            propSensorDiag = redactBase(sections["PROP_SENSOR_DIAG"].orEmpty().trim(), cleanKeys),
+            lsposedSensorHook = lsposedSensorHook,
+            sensorServiceInstances = sensorInstances,
+            sensorServiceVmaCount = sensorVmaCount,
             sensorServiceMaps = redactBase(sensorMapsSanitized, cleanKeys),
             daemonLog = redactedDaemonLog,
             lsposedLog = redactedLsposed,
@@ -390,10 +426,11 @@ echo "===END==="
         }
 
         // 4. Zygisk Sensor Hook (S)
-        val sensorDiagRaw = st.sensorDiag.ifBlank { snapshot.propSensorDiag }
-        val sensorHookRaw = snapshot.propSensorHook
+        val sensorDiagRaw = st.sensorDiag
+        val sensorHookRaw = snapshot.lsposedSensorHook
         val parsedMp = DIAG_MP_REGEX.find(sensorDiagRaw)?.groupValues?.getOrNull(1)?.toIntOrNull()
             ?: HOOK_MAPS_REGEX.find(sensorHookRaw)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: snapshot.sensorServiceInstances.takeIf { it > 1 }
         val parsedCore = DIAG_C_REGEX.find(sensorDiagRaw)?.groupValues?.getOrNull(1)?.toIntOrNull()
             ?: HOOK_CORE_REGEX.find(sensorHookRaw)?.groupValues?.getOrNull(1)?.toIntOrNull()
         val parsedDisc = DIAG_D_REGEX.find(sensorDiagRaw)?.groupValues?.getOrNull(1)?.toIntOrNull()
@@ -511,7 +548,17 @@ echo "===END==="
         return rawText.lineSequence()
             .filter { line ->
                 if (isLogcat) {
-                    LOGCAT_WARN_ERR_REGEX.containsMatchIn(line) || GENERIC_WARN_ERR_REGEX.containsMatchIn(line)
+                    if (AVC_DENIED_REGEX.containsMatchIn(line)) {
+                        isEngineRelevantAvc(line)
+                    } else {
+                        val parsed = THREADTIME_LINE_REGEX.find(line)
+                        if (parsed != null) {
+                            val level = parsed.groupValues[2]
+                            level == "W" || level == "E" || level == "F" || level == "A"
+                        } else {
+                            !line.startsWith("#") && GENERIC_WARN_ERR_REGEX.containsMatchIn(line)
+                        }
+                    }
                 } else {
                     GENERIC_WARN_ERR_REGEX.containsMatchIn(line)
                 }
@@ -528,7 +575,6 @@ echo "===END==="
         val st = snapshot.daemonSnap.status
         val dev = snapshot.deviceInfo
         val aliasMap = if (anonymizePackages) buildPackageAliasMap(snapshot.savedTargets) else emptyMap()
-        val sensorMapLines = snapshot.sensorServiceMaps.lineSequence().count { it.isNotBlank() }
 
         val sb = StringBuilder(2048)
         sb.appendLine("## Kuroko Teleport Diagnostics Summary")
@@ -553,10 +599,15 @@ echo "===END==="
                 "Daemon(`v${st.modVer.ifBlank { "?" }} #${st.modCode}`) / Sensor(`#${st.zygiskCode}`) · " +
                 "SHM(`L=${if (st.locShm) "OK" else "NO"}, P=${if (st.phoneShm) "OK" else "NO"}, S=${if (st.sensorShm) "OK" else "NO"}`)"
         )
-        val diagEffective = st.sensorDiag.ifBlank { snapshot.propSensorDiag }.ifBlank { "none" }
+        val diagEffective = st.sensorDiag.ifBlank { "none" }
+        val hookSegment = if (snapshot.lsposedSensorHook.isNotBlank()) {
+            " · hook=`${snapshot.lsposedSensorHook}`"
+        } else {
+            ""
+        }
         sb.appendLine(
-            "- **Sensor Hook**: prop=`${snapshot.propSensorHook.ifBlank { "none" }}` · " +
-                "diag=`$diagEffective` · libsensorservice_maps=`$sensorMapLines`"
+            "- **Sensor Hook**: diag=`$diagEffective`$hookSegment · " +
+                "libsensorservice=`${snapshot.sensorServiceInstances} instance(s) (${snapshot.sensorServiceVmaCount} VMAs)`"
         )
         sb.appendLine(
             "- **SELinux / Targets**: avc_denials=`${snapshot.selinuxAvcCount}` · " +
@@ -674,8 +725,9 @@ echo "===END==="
                 put("xposedCode", st.xposedCode)
                 put("zygiskCode", st.zygiskCode)
                 put("sensorDiag", st.sensorDiag)
-                put("propSensorHook", snapshot.propSensorHook)
-                put("propSensorDiag", snapshot.propSensorDiag)
+                if (snapshot.lsposedSensorHook.isNotBlank()) {
+                    put("lsposedSensorHook", snapshot.lsposedSensorHook)
+                }
             })
             put("versionCompat", JSONObject().apply {
                 put("state", snapshot.versionCompat.state.name)
@@ -691,6 +743,8 @@ echo "===END==="
                 put("secureFlag", snapshot.overlayPrefs.secureFlag)
             })
             put("selinuxAvcCount", snapshot.selinuxAvcCount)
+            put("sensorServiceInstances", snapshot.sensorServiceInstances)
+            put("sensorServiceVmaCount", snapshot.sensorServiceVmaCount)
             put("sensorServiceMaps", JSONArray().apply {
                 snapshot.sensorServiceMaps.lineSequence().filter { it.isNotBlank() }.forEach { put(it) }
             })
@@ -776,8 +830,8 @@ echo "===END==="
 
     fun buildSystemTabText(snapshot: DiagnosticSnapshot, anonymizePackages: Boolean): String {
         if (
-            snapshot.propSensorHook.isBlank() &&
-            snapshot.propSensorDiag.isBlank() &&
+            snapshot.daemonSnap.status.sensorDiag.isBlank() &&
+            snapshot.lsposedSensorHook.isBlank() &&
             snapshot.sensorServiceMaps.isBlank() &&
             snapshot.systemLogcat.isBlank()
         ) {
@@ -788,10 +842,14 @@ echo "===END==="
 
     private fun buildSystemLogBundle(snapshot: DiagnosticSnapshot, anonymizePackages: Boolean): String {
         val sb = StringBuilder()
-        sb.appendLine("# kuroko.sensor.hook: ${snapshot.propSensorHook.ifBlank { "(empty)" }}")
-        sb.appendLine("# kuroko.sensor.diag: ${snapshot.propSensorDiag.ifBlank { "(empty)" }}")
+        sb.appendLine("# STATUS.sensorDiag: ${snapshot.daemonSnap.status.sensorDiag.ifBlank { "(empty)" }}")
+        if (snapshot.lsposedSensorHook.isNotBlank()) {
+            sb.appendLine("# lsposed kuroko.sensor.hook: ${snapshot.lsposedSensorHook}")
+        }
+        sb.appendLine(
+            "# libsensorservice.so: ${snapshot.sensorServiceInstances} instance(s) (${snapshot.sensorServiceVmaCount} VMAs)"
+        )
         if (snapshot.sensorServiceMaps.isNotBlank()) {
-            sb.appendLine("# system_server libsensorservice.so maps:")
             sb.appendLine(snapshot.sensorServiceMaps)
         }
         if (snapshot.systemLogcat.isNotBlank()) {
@@ -847,31 +905,133 @@ echo "===END==="
         return out
     }
 
+    internal fun isEngineRelevantAvc(line: String): Boolean {
+        if (!AVC_DENIED_REGEX.containsMatchIn(line)) return false
+        if (AVC_UI_SANDBOX_SRC_REGEX.containsMatchIn(line) &&
+            AVC_UI_GPU_NOISE_TARGET_REGEX.containsMatchIn(line)
+        ) {
+            return false
+        }
+        if (AVC_DIRECT_TARGET_REGEX.containsMatchIn(line)) {
+            return true
+        }
+        return AVC_ENGINE_SCONTEXT_REGEX.containsMatchIn(line) &&
+            AVC_ENGINE_SUBJECT_REGEX.containsMatchIn(line)
+    }
+
+    private fun isNoisyUiOemTag(tag: String): Boolean {
+        val t = tag.trim()
+        if (t in NOISY_UI_OEM_TAGS) return true
+        return NOISY_UI_OEM_TAGS.any { noisy ->
+            t.startsWith("$noisy[") || t.startsWith("$noisy-") || t.startsWith("$noisy:")
+        }
+    }
+
+    internal fun isWhitelistedLogcatLine(line: String, selfCrashPids: Set<String> = emptySet()): Boolean {
+        if (line.isBlank() || line.startsWith("---------")) return false
+
+        // 1. SELinux AVC lines MUST pass strict engine-relevance filter (never short-circuit via com.kuroko.teleport)
+        if (AVC_DENIED_REGEX.containsMatchIn(line)) {
+            return isEngineRelevantAvc(line)
+        }
+
+        // 2. Always keep native engine tags and Kuroko-* Xposed tags
+        if (line.contains("KurokoDaemon") ||
+            line.contains("KurokoZygisk") ||
+            line.contains("KurokoSensorHook") ||
+            line.contains("Kuroko-")
+        ) {
+            return true
+        }
+
+        // 3. Own-package lines and AndroidRuntime / FATAL EXCEPTION crashes belonging to com.kuroko.teleport
+        val parsed = THREADTIME_LINE_REGEX.find(line)
+        val pid = parsed?.groupValues?.getOrNull(1)
+        val mentionsSelf = line.contains("com.kuroko.teleport")
+        val isOwnCrashLine = (line.contains("FATAL EXCEPTION") || line.contains("AndroidRuntime")) &&
+            (mentionsSelf || (pid != null && pid in selfCrashPids))
+        if (!mentionsSelf && !isOwnCrashLine) return false
+
+        if (parsed != null) {
+            val level = parsed.groupValues[2]
+            val tag = parsed.groupValues[3].trim()
+            if (isNoisyUiOemTag(tag)) return false
+            if (isOwnCrashLine || tag == "AndroidRuntime") return true
+            return level == "W" || level == "E" || level == "F" || level == "A"
+        }
+
+        return isOwnCrashLine ||
+            line.contains("Exception") ||
+            line.contains("Error") ||
+            line.trimStart().startsWith("at com.kuroko.teleport")
+    }
+
     private fun filterWhitelistedLogcat(raw: String): List<String> {
         if (raw.isBlank()) return emptyList()
-        return raw.lineSequence()
-            .map { it.trimEnd('\r') }
-            .filter { line ->
-                if (line.isBlank()) return@filter false
-                val directTag = line.contains("KurokoDaemon") ||
-                    line.contains("KurokoZygisk") ||
-                    line.contains("KurokoSensorHook") ||
-                    line.contains("Kuroko-") ||
-                    line.contains("com.kuroko.teleport")
-                if (directTag) return@filter true
-                AVC_DENIED_REGEX.containsMatchIn(line) && AVC_RELEVANT_REGEX.containsMatchIn(line)
+        val rawLines = raw.lineSequence().map { it.trimEnd('\r') }.toList()
+        val selfCrashPids = HashSet<String>()
+        for (line in rawLines) {
+            if (line.contains("AndroidRuntime") && line.contains("com.kuroko.teleport")) {
+                THREADTIME_LINE_REGEX.find(line)?.groupValues?.getOrNull(1)?.let { selfCrashPids.add(it) }
             }
-            .toList()
+        }
+        val seen = LinkedHashSet<String>()
+        for (line in rawLines) {
+            if (isWhitelistedLogcatLine(line, selfCrashPids)) {
+                seen.add(line)
+            }
+        }
+        return seen.toList()
+    }
+
+    internal fun isWhitelistedLsposedLine(line: String): Boolean {
+        if (line.isBlank()) return false
+        if (line.contains("[com.kuroko.teleport,")) return true
+        if (!line.contains("Kuroko-")) return false
+        val headerMatch = FOREIGN_LSPOSED_HEADER_REGEX.find(line)
+        if (headerMatch != null && headerMatch.groupValues[1] != "com.kuroko.teleport") {
+            return false
+        }
+        return true
     }
 
     private fun filterWhitelistedLsposed(raw: String): List<String> {
         if (raw.isBlank()) return emptyList()
         return raw.lineSequence()
             .map { it.trimEnd('\r') }
-            .filter { line ->
-                line.isNotBlank() && (line.contains("Kuroko-") || line.contains("com.kuroko.teleport"))
-            }
+            .filter { isWhitelistedLsposedLine(it) }
             .toList()
+    }
+
+    internal fun extractLsposedSensorHook(lsposedLog: String): String {
+        if (lsposedLog.isBlank()) return ""
+        return LSPOSED_SENSOR_HOOK_REGEX.findAll(lsposedLog)
+            .map { it.groupValues[1].trim().trimEnd(',', ';') }
+            .filter {
+                it.isNotBlank() &&
+                    !it.equals("null", ignoreCase = true) &&
+                    !it.equals("none", ignoreCase = true)
+            }
+            .lastOrNull()
+            .orEmpty()
+    }
+
+    internal fun parseSensorMapStats(sensorServiceMaps: String): Pair<Int, Int> {
+        if (sensorServiceMaps.isBlank()) return 0 to 0
+        val lines = sensorServiceMaps.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .toList()
+        val vmaCount = lines.size
+        val headerInstances = lines.count { line ->
+            val parts = line.split(Regex("\\s+"), limit = 4)
+            parts.size >= 3 &&
+                parts[1] == "r--p" &&
+                parts[2].isNotEmpty() &&
+                parts[2].all { it == '0' }
+        }
+        val effectiveInstances = if (headerInstances == 0 && vmaCount > 0) 1 else headerInstances
+        return effectiveInstances to vmaCount
     }
 
     private fun sanitizeSensorMaps(raw: String): String {
