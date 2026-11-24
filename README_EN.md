@@ -48,7 +48,7 @@
 | Component | Requirement | Notes |
 | :--- | :--- | :--- |
 | **Architecture** | `arm64-v8a` | 64-bit ARM devices only |
-| **Android Version** | **Android 12+** (`minSdk 31`) | Location & network isolation supports Android 12+; **Note: native sensor/pedometer hooks are currently verified on Android 17 — multi-version Android 12–16 support is on the [Roadmap](docs/ROADMAP.md)** |
+| **Android Version** | **Android 12+** (`minSdk 31`) | Both App and native binaries target Android 12+ (`android-31`) with built-in **Android 12–17 multi-version sensor symbol matching** (verified on Android 17; real-device feedback on Android 12–16 is welcome via Diagnostics export) |
 | **Root Framework** | **KernelSU / KSU2** | Installs the All-in-One module, starts the background daemon at boot, and applies SELinux rules |
 | **Zygisk** | **Zygisk Next** (API v4) | Powers system-side pedometer and IMU simulation |
 | **Xposed** | **LSPosed** | Check **ONLY** `System Framework (android)` and `Phone Services (com.android.phone)` — **never check target apps** |
@@ -124,7 +124,7 @@ Open **Settings → Diagnostics &amp; Logs** (or tap **View Logs** from the offl
 ## Roadmap / TODO
 
 - [x] System-side GPS / GNSS / NMEA, stationary pedometer & IMU sync, Wi-Fi & cell anti-leak, floating HUD, CHS/EN live switching, and redacted diagnostics export
-- [ ] Multi-version Android 12–16 native sensor & pedometer compatibility
+- [ ] Multi-device real-world verification & OEM ROM tuning on Android 12–16 (built-in `android-31` native baseline & multi-version sensor symbol matching already included)
 - [ ] GMS FusedLocationProvider (FLP) support
 - [ ] Virtual 4G/5G cell tower spoofing
 - [ ] Virtual nearby Wi-Fi AP list spoofing
@@ -158,6 +158,12 @@ Localization is fully data-driven with zero hardcoded language branches: add `ap
 - **[Architecture (`docs/ARCHITECTURE.md`)](docs/ARCHITECTURE.md)** — System architecture, shared-memory & IPC protocol, pure PLT/GOT native sensor injection, and kinematics / IMU mathematical models *(Chinese)*.
 - **[Roadmap (`docs/ROADMAP.md`)](docs/ROADMAP.md)** — Planned milestones including virtual cell towers, virtual Wi-Fi AP lists, Bluetooth/BLE isolation & spoofing, GMS FLP, and multi-version Android 12–17 support *(Chinese)*.
 - **[Engineering Checklist (`docs/TODOLIST.md`)](docs/TODOLIST.md)** — Subsystem-level completed milestones and upcoming engineering tasks *(Chinese)*.
+
+---
+
+## Community
+
+Join discussions, share multi-device compatibility feedback, and suggest new features on **[LINUX DO](https://linux.do)**, or open a **GitHub Issue** with a redacted diagnostic summary exported from **Settings → Diagnostics & Logs** for bug reports and Android 12–16 compatibility feedback.
 
 ---
 

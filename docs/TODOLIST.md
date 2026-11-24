@@ -41,6 +41,7 @@
 - [x] 配置 `module_template/sepolicy.rule` 完整覆盖 `zygote` / `system_server` / `radio` 三域只读 `memfd` 策略
 - [x] 彻底消除 Android 17 Zygisk Next 隔离 linker namespace 双副本陷阱：`arm64-v8a.so` **零 C `dlopen` 导入**，主路径经 JNI `java.lang.System.load` 加载至 `default` 命名空间并执行 8 点纯 PLT Hook；`StepInjectorThread` 内置纯 C++ ARM64 ELF64 `.rela.plt` GOT 自愈看门狗（`r--p offset=0`、`PROT_EXEC` 重定位守卫、`.dynstr` 边界校验、`sysconf(_SC_PAGESIZE)` 页对齐 `mprotect` + 8 个 `std::atomic` 原指针）
 - [x] 升级三层多句柄发现覆盖 Non-wakeup/Wakeup 双句柄，在 `hook_save_sensor_usage_item` 过滤 `arg4 >= 0` 哨兵污染；覆写 8 类连续传感器（含 `TYPE_ORIENTATION (3)`）与 40Hz 单调计步注入；嵌入 `mv=11` 实时遥测（`kuroko.sensor.hook` / `kuroko.sensor.diag`）
+- [x] 跨版本兼容基线加固：Native NDK 编译目标下探至 `android-31`（Android 12+，零 API>31 Bionic 符号依赖）；`sensor_hook.cpp` 升级为 ABI 安全的 `HookSlot` 多版本 Android 12–17 候选符号表（5 核心 + 3 发现位掩码去重，各参数个数变体独立精确签名包装与 `std::atomic` 原指针防 AAPCS64 栈参截断，未命中时 `LOGW` 自动打印 `.rela.plt` 候选符号供未知 OEM 排查）
 - [x] 配置可扩展多语言安装器与模块元数据：`module.prop`（`id=kuroko_teleport`、`name=Kuroko Teleport`、`author=Kuroko Teleport`）；`module_template/lang/{en,zh}.sh`（16 对称键，含 `MOD_DESC`）；`customize.sh` 通用 BCP-47 级联加载动态改写 `$MODPATH/module.prop` `description` 后清理 `$MODPATH/lang/` 与 `$MODPATH/apk/`
 - [x] 落实 All-in-One 策略 A1/A2/A4（SHA-256 验签、流式 `pm install -r -d -S`、PMS 离线暂存 `/data/adb/kuroko/pending_apk/` 由 `service.sh` 补装、签名冲突与 `uninstall.sh` 严禁 `pm uninstall` 保护用户路线）
 - [x] 跨平台构建与 CI/Release 工程化：`build_module.py` / `native/build_native.py` 动态探测 SDK/NDK/CMake/Ninja/LLVM，配合 `scripts/audit_i18n.py`、`.github/workflows/{ci,release}.yml` 与 `.github/ISSUE_TEMPLATE/bug_report.yml` 产出并审计 `dist/kuroko-teleport-ksu-module.zip`（16KB + BTI/PAC + 零 `libc++_shared.so` + 零 `dlopen`）
@@ -93,8 +94,8 @@
 
 ### 1. 多版本 Android 12–17 传感器 ABI 与多 ROM 泛化（Phase 2）
 
-- [ ] 在 `native/zygisk/sensor_hook.cpp` 中建立覆盖 Android 12–17（API 31–37）的多版本 `libsensorservice.so` C++ Mangled 符号候选表与 `SensorEventConnection` 构造/派发 ABI 匹配表（结合 `ro.build.version.sdk` 与 `.rela.plt` 动态探针按需匹配）
-- [ ] 为多版本 `libsensorservice.so` 增加运行时 `sensors_event_t` 尺寸与偏移校验，并完善非特定 OEM ROM 下的 AOSP 一级/三级计步句柄发现回退链路
+- [x] 将 Native NDK 编译目标下探至 `android-31`（Android 12+，验证零 API>31 Bionic 依赖），并在 `native/zygisk/sensor_hook.cpp` 建立覆盖 Android 12–17（API 31–37）的 ABI 安全 `HookSlot` 多版本候选符号表（各参数个数变体独立精确签名包装与 `std::atomic` 原指针 + 位掩码去重 + 未知 OEM ROM 未命中时 `LOGW` 打印 `.rela.plt` 候选符号）
+- [ ] 在 Android 12–16 多机型与第三方 OEM ROM 上开展社区真机验证（收集诊断包补齐潜在非标 OEM 符号变体），完善 `sensors_event_t` 运行时校验与非特定 OEM 下的 AOSP 一级/三级计步句柄发现回退验证
 - [ ] 保持现有 HyperOS 豁免逻辑解耦运行，调研并补充主流 ROM（ColorOS、OriginOS、One UI、Pixel/AOSP）的定位代理、省电冻结与模糊定位可选弱绑定适配钩子
 
 ### 2. 海外 GMS FusedLocationProvider (FLP) / `WorkSource` 适配（Phase 2）

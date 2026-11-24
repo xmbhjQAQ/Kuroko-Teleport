@@ -48,7 +48,7 @@
 | 项目 | 要求 | 说明 |
 | :--- | :--- | :--- |
 | **CPU 架构** | `arm64-v8a` | 仅支持 64 位 ARM 设备 |
-| **Android 版本** | **Android 12+** (`minSdk 31`) | 定位与环境隔离模块兼容 Android 12+；**注：Native 传感器/计步 Hook 当前仅在 Android 17 真机完成实测验证，Android 12–16 多版本适配见 [路线图](docs/ROADMAP.md)** |
+| **Android 版本** | **Android 12+** (`minSdk 31`) | App 与 Native 引擎均面向 Android 12+（`android-31`）编译，内置 **Android 12–17 多版本传感器符号匹配**（已在 Android 17 真机完成全链路验证；欢迎 Android 12–16 机型用户通过诊断包反馈适配情况） |
 | **Root 框架** | **KernelSU / KSU2** | 用于刷入 All-in-One 模块、开机拉起后台引擎与注入 SELinux 策略 |
 | **Zygisk** | **Zygisk Next** (API v4) | 用于系统侧传感器与计步仿真 |
 | **Xposed** | **LSPosed** | **仅勾选「系统框架 (`android`)」与「电话服务 (`com.android.phone`)」，切勿勾选目标 App** |
@@ -124,7 +124,7 @@ adb shell su -c "touch /data/adb/modules/kuroko_teleport/disable && reboot"
 ## 计划功能（TODO）
 
 - [x] 系统侧 GPS / GNSS / NMEA、室内静止计步与 IMU 同步、Wi-Fi 与基站防泄漏、后台悬浮控制窗、中英双语切换及脱敏诊断日志导出
-- [ ] 多版本 Android 12–16 Native 传感器与计步兼容适配
+- [ ] Android 12–16 多机型真机验证与厂商 ROM 适配完善（已内置 `android-31` 编译基线与多版本传感器符号匹配）
 - [ ] 海外 GMS 融合定位提供器（FLP）支持
 - [ ] 虚拟 4G/5G 蜂窝基站伪造
 - [ ] 虚拟周边 Wi-Fi 列表伪造
@@ -158,6 +158,12 @@ python build_module.py
 - **[深度技术架构文档 (`docs/ARCHITECTURE.md`)](docs/ARCHITECTURE.md)** — 系统分层架构、共享内存与 IPC 协议、Native 纯 PLT/GOT 传感器注入与运动学/IMU 数学模型。
 - **[演进路线图 (`docs/ROADMAP.md`)](docs/ROADMAP.md)** — 各阶段规划（含虚拟基站、虚拟 Wi-Fi、蓝牙/BLE 隔离与伪造、GMS FLP 及 Android 12–17 多版本适配）。
 - **[工程待办清单 (`docs/TODOLIST.md`)](docs/TODOLIST.md)** — 按子系统拆分的已完成项与后续迭代可勾选任务。
+
+---
+
+## 社区支持
+
+欢迎在 **[LINUX DO](https://linux.do)** 社区交流使用体验、分享多机型兼容性测试反馈与功能建议；如遇具体异常或需提交 Android 12–16 适配诊断日志，也可直接通过 **GitHub Issues** 附带应用内导出的脱敏诊断摘要进行反馈。
 
 ---
 

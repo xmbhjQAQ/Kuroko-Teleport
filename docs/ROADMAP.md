@@ -50,7 +50,8 @@ flowchart LR
   - **`v0.6.2` 应用内诊断中心、自动体检、脱敏日志包与 Issue 表单（✅ 已通过 5/5 Gate 独立审计，0 缺陷）**：
     - 落地零常驻后台的 **应用内诊断与日志中心（`DiagnosticsDialog.kt`）**：`DiagnosticCollector.kt` 单次有界只读采集 5 源系统/引擎/LSPosed/传感器日志，配合 400 条内存事件环形缓冲 `AppLogBuffer.kt` 与 5 项本地自动体检（Root/Daemon、四端版本锁、LSPosed L/P、Zygisk 传感器 S 区分多映射与 Android ABI 未适配、SELinux AVC）。
     - 全链路强制隐私脱敏（永不读 `token`、剥离 API Key / 坐标 / NMEA / MAC / 邮箱与无关应用日志，默认开启目标包名匿名化）+ 零新增敏感权限导出（复制 Markdown 摘要、作用域 `FileProvider` `cache/diagnostics/` 分享 6 文件 ZIP、SAF `CreateDocument` 保存 ZIP）。
-    - 守护进程新增 `/data/adb/kuroko/daemon.log` 256 KB 原子轮转（截取换行对齐 128 KB 尾部写入 `0600` `.tmp` 后 `rename()`）；新增双语 GitHub Issue 反馈表单 `.github/ISSUE_TEMPLATE/bug_report.yml`（字符串库扩展至 491/491 对称键）。
+    - 守护进程新增 `/data/adb/kuroko/daemon.log` 256 KB 原子轮转（截取换行对齐 128 KB 尾部写入 `0600` `.tmp` 后 `rename()`）；新增双语 GitHub Issue 反馈表单 `.github/ISSUE_TEMPLATE/bug_report.yml`（字符串库扩展至 491/491 对称键）；优化诊断采集信噪比（两阶段 `logcat`、零误报 SELinux AVC 过滤、严格防跨模块 LSPosed 白名单与精确 ELF 实例数解析）。
+    - **跨版本兼容基线加固**：Native NDK 编译目标下探至 **`android-31`**（与 App `minSdk 31` 一致，零 API>31 Bionic 符号依赖）；`sensor_hook.cpp` 升级为 ABI 安全的 **`HookSlot` 多版本 Android 12–17 候选符号表**（各参数变体独立精确签名包装与 `std::atomic` 原指针防 ARM64 栈参截断、位掩码防重复计数，以及未知 OEM ROM 未命中时 `LOGW` 自动转储候选符号）。
 - **阶段收口验收（✅ 已完成）**：
   - 已在 Android 17 测试设备完成全链路真机验收：零 Bootloop 启动、SELinux 零拒绝握手、All-in-One 单包双语流式安装与空间回收、`L✓ P✓ S✓` 与四端 `v0.6.2(11)` 全绿对齐、应用内诊断中心自动体检与脱敏 ZIP 导出、内置传感器自检、主流地图跨城定位及运动计步类应用室内桌面静止长时跑圈验收全部通过。
 
@@ -61,7 +62,7 @@ flowchart LR
 **目标**：将 Native 传感器/计步引擎从当前已实测的 Android 17 扩展至 **Android 12–17 (API 31–37)** 主流版本与多厂商 ROM，并解决海外依赖 Google Play Services (`com.google.android.gms`) 融合定位提供器（FLP）的地图与运动类应用间接请求定位时的归因与缓存串扰问题。
 
 - **轨道 1：多版本 Android 12–17 传感器 ABI 与多 ROM 泛化**
-  1. **多版本 `libsensorservice.so` 符号与 ABI 匹配表**：在 `native/zygisk/sensor_hook.cpp` 中建立覆盖 API 31–37 的 C++ Mangled 符号候选表与 `SensorEventConnection` 构造/派发 ABI 匹配策略（按 `ro.build.version.sdk` 与 `.dynsym`/`.rela.plt` 动态探针匹配，验证 `sizeof(sensors_event_t)`、句柄发现回退链路与页对齐 GOT 修补）。
+  1. **多版本 `libsensorservice.so` 符号表与 `android-31` 编译基线（✅ 代码基线已落地 · 待社区多机型真机验证）**：Native NDK 构建目标已下探至 `android-31`（零 API>31 Bionic 依赖），`native/zygisk/sensor_hook.cpp` 已引入覆盖 API 31–37 的 `HookSlot` 候选符号表（各参数变体独立精确签名包装 + 位掩码去重计数 + 未知 OEM 符号 `LOGW` 自动转储）；后续将结合社区在 Android 12–16 多机型导出的脱敏诊断包持续补齐非标 OEM 符号变体与运行时偏移校验。
   2. **跨厂商 ROM 可选适配模块**：在保持现有 HyperOS 豁免模块独立运行的前提下，补充其他主流 ROM（AOSP / Pixel、ColorOS、OriginOS、One UI 等）的定位代理、省电冻结与模糊定位可选适配钩子，全部做到反射弱绑定、按类存在性静默按需启用。
 - **轨道 2：海外 GMS FusedLocationProvider (FLP) / `WorkSource` 深度适配**
   1. **`WorkSource` / `AttributionSource` 归因解析**：当目标 App 经由 `com.google.android.gms` 请求底层 `LocationProviderManager` 时，`CallerIdentity.uid` 为 GMS 自身 UID，实际发起方位于 `LocationRequest.getWorkSource()`（或 `AttributionSource` 链）中。在 `system_server` 侧增加多 UID `WorkSource` 拆分识别与回调隔离逻辑，避免污染其他非目标 GMS 客户端。

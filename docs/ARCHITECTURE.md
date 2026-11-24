@@ -142,9 +142,15 @@ flowchart LR
      - 修补成功后登记 `g_patched_bases` 并通过 JNI 更新 `kuroko.sensor.hook = "ok:got:mv=11,core=%d/5,disc=%d/3,maps=%d"`。
    - 全部 8 个 `g_orig_*` 函数指针均为 `std::atomic`（`memory_order_acquire` 读取并判空），无并发竞态。
 
-### 3.3 8 点纯 PLT/GOT 符号表与三层多句柄发现机制（含哨兵过滤）
+### 3.3 8 逻辑槽位纯 PLT/GOT 多版本候选符号表（Android 12–17 / `android-31`）与三层多句柄发现
 
-| 分组 | C++ Mangled 符号名（`R_AARCH64_JUMP_SLOT`） | 劫持职责与寄存器/ABI 实锤 |
+- **Native 编译基线 (`android-31`)**：`native/build_native.py` 面向 **`android-31`**（Android 12+，与 App `minSdk 31` 一致）编译 `kuroko_daemon` 与 `kuroko_zygisk`，确保 ELF 零 API>31 Bionic 符号依赖。
+- **ABI 安全多版本候选表（`HookSlot`）**：`sensor_hook.cpp` 将 8 个钩子按逻辑槽位分为 5 个核心槽位（`CONN_C1`、`ADD_SENSOR`、`REMOVE_SENSOR`、`SEND_EVENTS`、`CLEANUP_CONN`）与 3 个发现槽位（`SENSOR_LIST_ADD`、`RECENT_LOGGER_C1`、`MI_SAVE_USAGE`），通过位掩码 `g_matched_core_mask` / `g_matched_disc_mask` 去重统计 `popcount`（始终保持 `core=5/5`、`disc=3/3`）。为严格满足 ARM64 AAPCS64 调用约定、杜绝跨参数个数栈参截断，**每一种参数变体均拥有独立精确签名包装函数与独立 `std::atomic` 原函数指针**：
+  - `CONN_C1` 覆盖 6 参（早期 AOSP 12 无 `attributionTag`）、7 参（AOSP 12–17 标准与 `const String8&` 变体）、8 参（AOSP 14+ 含 `deviceId`）及 9 参（`...S9_ib` / `...S9_ii`）全部变体，共用 `register_conn_uid(self, uid)`。
+  - `SENSOR_LIST_ADD` 覆盖 4 参（早期 AOSP 12）、5 参（AOSP 12–13）与 6 参（AOSP 14–17 含 `deviceId`）变体，共用 `tls_pending_reg_handle` 注册逻辑。
+- **未知 OEM 自诊断转储**：若在某未知 ROM 扫描 `.rela.plt` 后 `CONN_C1` 或 `SENSOR_LIST_ADD` 仍未命中，看门狗会对每个基址一次性输出 `LOGW`（上限 6 行）打印 `.rela.plt` 中含 `SensorEventConnectionC` / `SensorList3add` 的实际 Mangled 符号名，用户通过应用内诊断中心导出日志包即可精准定位缺失变体。
+
+| 逻辑槽位 | 典型 C++ Mangled 符号名（`R_AARCH64_JUMP_SLOT`） | 劫持职责与寄存器/ABI 实锤 |
 | :--- | :--- | :--- |
 | **核心 1/5** | `_ZN7android13SensorService21SensorEventConnectionC1ERKNS_2spIS0_EEjiNS_7String8EbRKNS_8String16ES9_` | 连接建立时直接捕获 `x0=this (conn_ptr)`、`w2=uid`，建立 `g_conns[conn_ptr] -> ConnRecord{uid}`，**零结构体偏移硬编码**。 |
 | **核心 2/5** | `_ZN7android13SensorService21SensorEventConnection9addSensorEi` | 记录连接激活的传感器 `handle` 集合 `active_handles`；若新增句柄或为 `STEP_COUNTER` 则立即置位 `need_initial_emit=true`（确保复跑复用连接也能立刻收到首包）。 |
@@ -302,7 +308,7 @@ flowchart TD
 
 1. **零常驻开销的 5 源按需采集（`DiagnosticCollector.kt` & `AppLogBuffer.kt`）**：
    - 不起常驻后台 `logcat` 监听进程；在应用进程内维护线程安全的 400 条循环事件缓冲 `AppLogBuffer`（仅记录连接/启停/版本锁/自检/换语等非敏感状态，绝不记录鉴权令牌或经纬度）。
-   - 用户打开诊断中心时，单次执行有界只读 `su -c` 快照（6 秒超时、1 MiB 非阻塞读取上限），汇总 5 类排障数据：① 模块 `module.prop`/`disable`/`boot_guard`/`lang`/`apk_installed.prop` 与守护进程端口状态；② `/data/adb/kuroko/daemon.log` 尾 128 KB；③ 白名单过滤 `logcat`（仅保留 `KurokoDaemon`/`KurokoZygisk`/`KurokoSensorHook`/`Kuroko-`/`com.kuroko.teleport` 及相关 SELinux `avc: denied`）；④ 白名单过滤 LSPosed `modules_*.log`/`verbose_*.log`（仅保留含 `Kuroko-` 或 `com.kuroko.teleport` 的日志行）；⑤ 脱敏后的 `system_server` `libsensorservice.so` `/proc/<pid>/maps` 与安全 `Build` 元数据。
+   - 用户打开诊断中心时，单次执行有界只读 `su -c` 快照（6 秒超时、1 MiB 非阻塞读取上限），汇总 5 类排障数据：① 模块 `module.prop`/`disable`/`boot_guard`/`lang`/`apk_installed.prop` 与守护进程端口状态；② `/data/adb/kuroko/daemon.log` 尾 128 KB；③ 两阶段 `logcat`（阶段 A 全环形缓冲专抓 `KurokoDaemon`/`KurokoZygisk`/`KurokoSensorHook` 尾 300 行 + 阶段 B 近期 4000 行中的崩溃、本包 `W`/`E`/`F` 及经 `isEngineRelevantAvc` 精准筛选的引擎相关 SELinux AVC，自动剥离 `untrusted_app`/`proc_perfmgr` 与 OEM UI 调度噪音）；④ 严格白名单过滤的 LSPosed `modules_*.log`/`verbose_*.log`（仅保留 `[com.kuroko.teleport,` 与非外来模块头的 `Kuroko-*` 行，严防跨模块日志泄漏，并在离线时自动提取 `kuroko.sensor.hook` 回退信息）；⑤ 解析精确 ELF 实例数与 VMA 总数的 `system_server` `libsensorservice.so` 映射（`r--p` 且 `offset=0`）及安全 `Build` 元数据。
 2. **强制隐私脱敏引擎与零新增敏感权限**：
    - 采集器**永不读取 `/data/adb/kuroko/token`**，永不采集设备序列号/IMEI/Android ID/MAC/SSID，永不导出收藏路线、点位或无关应用/Xposed 模块日志（在 Kotlin 侧对 `logcat` 与 LSPosed 日志实施二次白名单校验）。
    - 所有界面展示、剪贴板摘要与导出文件均强制经过统一脱敏管道：精确剥离地图 API Key（`<REDACTED_KEY>`）、`AUTH`/`token=`（`<REDACTED>`）、`SET_POINT`/`SET_ROUTE`、NMEA 与十进制坐标（`<REDACTED_COORD>`）、MAC（`<REDACTED_MAC>`）及邮箱（`<REDACTED_EMAIL>`）；默认开启确定性目标应用包名匿名化（`target_1`、`target_2`…）。
