@@ -70,13 +70,84 @@ std::atomic<int32_t> g_zygisk_code{0};
 std::mutex g_diag_mu;
 std::string g_sensor_diag;
 std::mutex g_log_mu;
-constexpr const char* kDaemonLogPath = "/data/adb/kuroko/daemon.log";
-constexpr const char* kLangFilePath  = "/data/adb/kuroko/lang";
-constexpr const char* kLangTmpPath   = "/data/adb/kuroko/lang.tmp";
+constexpr const char* kDaemonLogPath      = "/data/adb/kuroko/daemon.log";
+constexpr const char* kDaemonLogTmpPath   = "/data/adb/kuroko/daemon.log.tmp";
+constexpr off_t       kDaemonLogMaxBytes  = 262144; // 256 KB cap
+constexpr size_t      kDaemonLogKeepBytes = 131072; // 128 KB retained tail
+constexpr const char* kLangFilePath       = "/data/adb/kuroko/lang";
+constexpr const char* kLangTmpPath        = "/data/adb/kuroko/lang.tmp";
+
+void rotate_daemon_log_if_needed_locked() {
+    struct stat st{};
+    if (stat(kDaemonLogPath, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= kDaemonLogMaxBytes) {
+        return;
+    }
+
+    int rfd = open(kDaemonLogPath, O_RDONLY | O_CLOEXEC);
+    if (rfd < 0) return;
+
+    off_t seek_off = (st.st_size > static_cast<off_t>(kDaemonLogKeepBytes))
+                         ? (st.st_size - static_cast<off_t>(kDaemonLogKeepBytes))
+                         : 0;
+    if (lseek(rfd, seek_off, SEEK_SET) < 0) {
+        close(rfd);
+        return;
+    }
+
+    std::vector<char> buf(kDaemonLogKeepBytes);
+    size_t total_read = 0;
+    while (total_read < buf.size()) {
+        ssize_t r = read(rfd, buf.data() + total_read, buf.size() - total_read);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (r == 0) break;
+        total_read += static_cast<size_t>(r);
+    }
+    close(rfd);
+
+    size_t start_off = 0;
+    if (seek_off > 0 && total_read > 0) {
+        const void* nl = std::memchr(buf.data(), '\n', total_read);
+        if (nl) {
+            size_t next_off = static_cast<size_t>(static_cast<const char*>(nl) - buf.data()) + 1;
+            if (next_off < total_read) {
+                start_off = next_off;
+            }
+        }
+    }
+
+    int tfd = open(kDaemonLogTmpPath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (tfd < 0) return;
+
+    bool write_ok = true;
+    size_t remaining = total_read - start_off;
+    const char* ptr = buf.data() + start_off;
+    while (remaining > 0) {
+        ssize_t w = write(tfd, ptr, remaining);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            write_ok = false;
+            break;
+        }
+        ptr += w;
+        remaining -= static_cast<size_t>(w);
+    }
+    fchmod(tfd, 0600);
+    close(tfd);
+
+    if (!write_ok || rename(kDaemonLogTmpPath, kDaemonLogPath) != 0) {
+        unlink(kDaemonLogTmpPath);
+    }
+}
 
 void write_daemon_log(bool truncate, const char* fmt, ...) {
     std::lock_guard<std::mutex> lk(g_log_mu);
     mkdir("/data/adb/kuroko", 0700);
+    if (!truncate) {
+        rotate_daemon_log_if_needed_locked();
+    }
     int flags = O_WRONLY | O_CREAT | O_CLOEXEC | (truncate ? O_TRUNC : O_APPEND);
     int fd = open(kDaemonLogPath, flags, 0600);
     if (fd < 0) return;
