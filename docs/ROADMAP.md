@@ -5,7 +5,7 @@
 ```mermaid
 flowchart LR
     P0["Phase 0\n真机探针与基线锁定\n(已完成)"]
-    P1["Phase 1 (v0.6.1 All-in-One)\n国内 LBS + 跑步全闭环 +\n悬浮 HUD + 四端锁定 + 多语言\n(已构建审计 · 持续验收)"]
+    P1["Phase 1 (v0.6.2 All-in-One)\n国内 LBS + 跑步全闭环 +\n悬浮 HUD + 多语言 + 诊断中心\n(真机验收已完成)"]
     P2["Phase 2\n多版本 Android 12-17 泛化\n+ 海外 GMS FLP / WorkSource"]
     P3["Phase 3\n微信/支付宝/系统健康\nSteps & Health Connect"]
     P4["Phase 4\n虚拟基站 / 虚拟 Wi-Fi /\n蓝牙 BLE 隔离与伪造 / LSPlant"]
@@ -27,9 +27,9 @@ flowchart LR
 
 ---
 
-## Phase 1：国内主流 LBS SDK + 运动计步类应用全闭环（✅ 核心落地 · 持续真机验收）
+## Phase 1：国内主流 LBS SDK + 运动计步类应用全闭环（✅ 已完成）
 
-**当前统一基线**：**Kuroko Teleport `v0.6.1`** (`versionCode=10`, `IPC=2`, `SHM=1`) — All-in-One 单包刷入 **`dist/kuroko-teleport-ksu-module.zip`**（内嵌 `ZIP_STORED` `apk/kuroko.apk`）。
+**当前统一基线**：**Kuroko Teleport `v0.6.2`** (`versionCode=11`, `IPC=2`, `SHM=1`) — All-in-One 单包刷入 **`dist/kuroko-teleport-ksu-module.zip`**（内嵌 `ZIP_STORED` `apk/kuroko.apk`）。
 
 **目标**：在不向任何目标第三方 App 注入代码的前提下，实现对主流地图 LBS 定位 SDK 以及第三方运动计步类应用的全链路仿真——即使在室内将手机平放桌面，也能稳定输出平滑轨迹、合法卫星/NMEA 与抗频域检测的同步计步及 5 路 IMU 波形，并具备单包一体分发、四端严格版本锁定与全链路可扩展多语言体验。
 
@@ -45,11 +45,14 @@ flowchart LR
     - 抽离 437 组 100% 对称 Android 字符串（`strings.xml` 246 键 + `strings_modules.xml` 191 键，含 LSPosed 双语描述），配置 `res/xml/locales_config.xml` 接入 Android 13+ 原生 Per-App Language，非 `xposed/` 代码零残留硬编码中文与零 `if (lang == "zh")` 分支。
     - 实现注册表驱动 `AppLocaleManager.kt`（母语自称 `SUPPORTED_LANGUAGES`）+ 设置页可扩展 `FlowRow` 选择器 + `FloatingOverlayService` 接收 `ACTION_REFRESH_LOCALE` 实时重建悬浮窗与通知栏 + `RouteStore` `builtInKey` 预设本地化 + `GeocoderClient` 动态 BCP-47 `accept-language`。
     - 守护进程新增 `SET_LANG <auto|BCP-47>`（原子写 `0600` `/data/adb/kuroko/lang`）；`customize.sh` 实现通用 BCP-47 级联加载（`en.sh -> <primary>.sh -> <script-region>.sh -> <region>.sh`）并安全动态本地化 `$MODPATH/module.prop` 描述后清理 `$MODPATH/lang/`；`build_module.py` 动态扫描并审计 `module_template/lang/*.sh`。
-  - **`v0.6.1` 全栈一致性定型与资源完善（✅ 已通过 4/4 Gate 独立审计，0 缺陷）**：
-    - 补齐 Android 13–17 Adaptive + Monochrome 桌面图标、`24dp` 前台保活通知栏矢量图标（`ic_stat_kuroko.xml`）及多密度兼容资源，并将用户可见文案统一泛化为通用 Android 表达。
-    - 完成 `com.kuroko.teleport`、`id=kuroko_teleport`、`common/include/kuroko_shm.h`（`0x4F52554B` / `0x004B5243` / `0x004B5250`）、`bin/kuroko_daemon`、`zygisk/arm64-v8a.so` 与 `dist/kuroko-teleport-ksu-module.zip` 全栈零缺陷四门禁审计。
-- **阶段收口验收（进行中）**：
-  - 已完成 Android 17 真机零 Bootloop 启动、SELinux 零拒绝握手及主流地图应用实测；待刷入 `v0.6.1` All-in-One 单包（`dist/kuroko-teleport-ksu-module.zip`）验收双语安装与切换、`L✓ P✓ S✓` 与四端 `v0.6.1(10)` 全绿对齐、内置传感器自检与第三方定位及运动计步类应用 30 分钟长时跑圈验收。
+  - **`v0.6.1` 全栈一致性定型与 CI/Release 工程化（✅ 已完成）**：
+    - 补齐 Android 13–17 Adaptive + Monochrome 桌面图标、`24dp` 前台保活通知栏矢量图标（`ic_stat_kuroko.xml`）及多密度兼容资源，并将用户可见文案统一泛化为通用 Android 表达；落地跨平台构建脚本、`scripts/audit_i18n.py` 与双 GitHub Actions 工作流（`ci.yml` / `release.yml`）。
+  - **`v0.6.2` 应用内诊断中心、自动体检、脱敏日志包与 Issue 表单（✅ 已通过 5/5 Gate 独立审计，0 缺陷）**：
+    - 落地零常驻后台的 **应用内诊断与日志中心（`DiagnosticsDialog.kt`）**：`DiagnosticCollector.kt` 单次有界只读采集 5 源系统/引擎/LSPosed/传感器日志，配合 400 条内存事件环形缓冲 `AppLogBuffer.kt` 与 5 项本地自动体检（Root/Daemon、四端版本锁、LSPosed L/P、Zygisk 传感器 S 区分多映射与 Android ABI 未适配、SELinux AVC）。
+    - 全链路强制隐私脱敏（永不读 `token`、剥离 API Key / 坐标 / NMEA / MAC / 邮箱与无关应用日志，默认开启目标包名匿名化）+ 零新增敏感权限导出（复制 Markdown 摘要、作用域 `FileProvider` `cache/diagnostics/` 分享 6 文件 ZIP、SAF `CreateDocument` 保存 ZIP）。
+    - 守护进程新增 `/data/adb/kuroko/daemon.log` 256 KB 原子轮转（截取换行对齐 128 KB 尾部写入 `0600` `.tmp` 后 `rename()`）；新增双语 GitHub Issue 反馈表单 `.github/ISSUE_TEMPLATE/bug_report.yml`（字符串库扩展至 491/491 对称键）。
+- **阶段收口验收（✅ 已完成）**：
+  - 已在 Android 17 测试设备完成全链路真机验收：零 Bootloop 启动、SELinux 零拒绝握手、All-in-One 单包双语流式安装与空间回收、`L✓ P✓ S✓` 与四端 `v0.6.2(11)` 全绿对齐、应用内诊断中心自动体检与脱敏 ZIP 导出、内置传感器自检、主流地图跨城定位及运动计步类应用室内桌面静止长时跑圈验收全部通过。
 
 ---
 

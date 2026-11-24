@@ -18,7 +18,7 @@
 - **Stationary Indoor Pedometer & IMU Sync**: Delivers synthetic GPS, multi-constellation GNSS/NMEA, monotonically increasing steps, and phase-synchronized motion sensors even while your phone rests completely still indoors — complete with a built-in **Sensor Self-Test** in Settings.
 - **Per-App Wi-Fi & Cell Anti-Leak Isolation**: Choose between **Strict Cross-City** (hides nearby Wi-Fi scans/info, cell towers, and raw GNSS measurements) and **Local Outdoor** (hides Wi-Fi while preserving local cell towers) independently for each target app.
 - **Background Floating HUD & Screen-Capture Protection**: Edge-snapping floating capsule and expandable mini control panel that auto-appears when backgrounded, notification quick controls, and a dynamic `FLAG_SECURE` screen-capture hiding toggle.
-- **All-in-One Install, Boot-Guard & Live Language Switch**: A single KernelSU module ZIP auto-installs the companion App and immediately reclaims storage, verifies strict cross-component version alignment, protects against bootloops via automatic `boot-guard` recovery, and supports instant Simplified Chinese / English switching (including Android Per-App Language).
+- **All-in-One Install, Boot-Guard, Diagnostics & Live Language Switch**: A single KernelSU module ZIP auto-installs the companion App and immediately reclaims storage, verifies strict cross-component version alignment, protects against bootloops via `boot-guard`, includes a built-in Diagnostics & Logs center (auto health checks + redacted log export), and supports instant Simplified Chinese / English switching.
 
 ---
 
@@ -111,6 +111,27 @@ adb shell su -c "touch /data/adb/modules/kuroko_teleport/disable && reboot"
 Open your device's **App Info → Battery** settings for **Kuroko Teleport** and set battery optimization to **Unrestricted**, and allow notification + overlay permissions so the system does not kill the floating HUD during long background sessions.
 
 </details>
+
+<details>
+<summary><strong>How do I troubleshoot issues or report a bug?</strong></summary>
+
+Open **Settings → Diagnostics &amp; Logs** (or tap **View Logs** from the offline / version-lock dialog) to run the built-in Auto Health Checks and inspect categorized logs. When opening a GitHub Issue, tap **Copy Summary** to paste the redacted Markdown report, and optionally attach the exported ZIP via **Share ZIP / Save ZIP** (auth tokens, API keys, routes/coordinates, and unrelated app logs are always stripped automatically, with target app package anonymization enabled by default).
+
+</details>
+
+---
+
+## Roadmap / TODO
+
+- [x] System-side GPS / GNSS / NMEA, stationary pedometer & IMU sync, Wi-Fi & cell anti-leak, floating HUD, CHS/EN live switching, and redacted diagnostics export
+- [ ] Multi-version Android 12–16 native sensor & pedometer compatibility
+- [ ] GMS FusedLocationProvider (FLP) support
+- [ ] Virtual 4G/5G cell tower spoofing
+- [ ] Virtual nearby Wi-Fi AP list spoofing
+- [ ] Bluetooth / BLE scan isolation & virtual beacon spoofing
+- [ ] GPX / KML route import & 360° floating joystick
+
+See [docs/TODOLIST.md](docs/TODOLIST.md) for the full engineering checklist.
 
 ---
 

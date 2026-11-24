@@ -1,0 +1,64 @@
+name: Bug Report / 问题反馈
+description: Report a bug with redacted diagnostics from Kuroko Teleport / 反馈问题并附上应用内脱敏诊断摘要
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### How to collect logs / 如何快速收集诊断信息
+
+        1. Open **Kuroko Teleport → Settings → Diagnostics & Logs** (打开 **Kuroko Teleport → 设置 → 诊断与日志**).
+        2. Tap **Copy Summary** (**复制诊断摘要**) and paste it into the **Diagnostics Summary** box below.
+        3. *(Optional)* Tap **Save ZIP** or **Share ZIP** (**保存 ZIP** / **分享 ZIP**) and drag-and-drop the redacted `.zip` bundle into the attachment box below.
+
+        > Built-in redaction automatically strips auth tokens, map API keys, GPS coordinates, MAC addresses, and (by default) anonymizes target app package names.
+        > 内置脱敏会自动抹除鉴权 Token、地图 API Key、GPS 坐标与 MAC 地址，并默认将目标应用包名匿名化。
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Redacted Diagnostics Summary / 脱敏诊断摘要
+      description: Paste the Markdown summary copied from Settings → Diagnostics & Logs → Copy Summary / 粘贴从「设置 → 诊断与日志 → 复制诊断摘要」复制的 Markdown 摘要
+      placeholder: |
+        Paste your copied Kuroko Teleport diagnostics Markdown summary here...
+        请在此粘贴复制的 Kuroko Teleport 脱敏诊断摘要…
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction Steps & Behavior / 复现步骤与现象描述
+      description: Describe what you did, what you expected to happen, and what actually happened / 描述操作步骤、预期表现与实际现象
+      placeholder: |
+        1. ...
+        2. ...
+        Expected / 预期: ...
+        Actual / 实际: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Redacted Diagnostic ZIP & Screenshots (Optional) / 脱敏诊断包 (.zip) 与截图（可选）
+      description: Drag and drop the exported `kuroko-diag-*.zip` bundle or screenshots here / 可将导出的 `kuroko-diag-*.zip` 诊断包或截图拖拽到此处
+      placeholder: Drag & drop redacted diagnostic .zip or screenshots here (optional) / 拖拽脱敏诊断 .zip 或截图至此处（可选）
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist / 提交前确认
+      options:
+        - label: >-
+            I enabled Kuroko Teleport in LSPosed for **ONLY** System Framework (`android`) and Phone Services (`com.android.phone`), and did **NOT** check any target apps. / 已确认在 LSPosed 中**仅勾选**「系统框架 (`android`)」与「电话服务 (`com.android.phone`)」，**未勾选**任何目标应用。
+          required: true
+        - label: >-
+            I rebooted after flashing/updating `kuroko-teleport-ksu-module.zip` and verified the module/App version alignment. / 已在刷入或更新模块后重启设备，并核对了模块与 App 版本一致。
+          required: true
+        - label: >-
+            I verified that my report contains no personal API keys, real GPS coordinates, or sensitive credentials. / 已确认提交内容不含个人 API Key、真实坐标或敏感凭证。
+          required: true
