@@ -8,7 +8,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * LSPosed entry point for Kuroko Teleport.
  *
- * Strictly system-side ONLY: hooks only `android` (system_server) and `com.android.phone`.
+ * Strictly system-side ONLY: hooks only `android` (system_server), `com.android.phone`,
+ * and `com.android.bluetooth` (plus `com.google.android.bluetooth` on mainline BT builds).
  * Target user applications are NEVER injected or hooked.
  */
 class KurokoXposedEntry : IXposedHookLoadPackage {
@@ -17,9 +18,12 @@ class KurokoXposedEntry : IXposedHookLoadPackage {
         private const val TAG = "Kuroko-Entry"
         private const val PKG_ANDROID = "android"
         private const val PKG_PHONE = "com.android.phone"
+        private const val PKG_BLUETOOTH = "com.android.bluetooth"
+        private const val PKG_GOOGLE_BLUETOOTH = "com.google.android.bluetooth"
 
         private val systemServerInitialized = AtomicBoolean(false)
         private val phoneProcessInitialized = AtomicBoolean(false)
+        private val bluetoothProcessInitialized = AtomicBoolean(false)
     }
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -38,6 +42,7 @@ class KurokoXposedEntry : IXposedHookLoadPackage {
                 safeInit("LocationHook") { LocationHook.initSystemServer(cl) }
                 safeInit("WifiConnectivityHook") { WifiConnectivityHook.initSystemServer(cl) }
                 safeInit("TelephonyHook(system_server)") { TelephonyHook.initSystemServer(cl) }
+                safeInit("BluetoothHook(system_server)") { BluetoothHook.initSystemServer(cl) }
                 safeInit("HyperOsHook") { HyperOsHook.initSystemServer(cl) }
             }
 
@@ -47,6 +52,14 @@ class KurokoXposedEntry : IXposedHookLoadPackage {
                 }
                 XposedBridge.log("$TAG: Initializing Kuroko Teleport com.android.phone hooks")
                 safeInit("TelephonyHook(com.android.phone)") { TelephonyHook.initPhoneProcess(cl) }
+            }
+
+            PKG_BLUETOOTH, PKG_GOOGLE_BLUETOOTH -> {
+                if (!bluetoothProcessInitialized.compareAndSet(false, true)) {
+                    return
+                }
+                XposedBridge.log("$TAG: Initializing Kuroko Teleport $pkg hooks")
+                safeInit("BluetoothHook($pkg)") { BluetoothHook.initBluetoothProcess(cl) }
             }
 
             else -> {

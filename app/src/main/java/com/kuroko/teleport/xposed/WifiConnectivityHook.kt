@@ -12,14 +12,23 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * System-server Wi-Fi & Connectivity anti-leak hooks for Android 17 / HyperOS 4 APEX services:
+ * System-server Wi-Fi & Connectivity hooks for Android 12–17 APEX services:
  *  - Dynamically captures APEX ClassLoaders for service-wifi.jar and service-connectivity.jar
  *  - Channel A: com.android.server.wifi.WifiServiceImpl
- *      * getScanResults(String, String) -> empty com.android.wifi.x.com.android.modules.utils.ParceledListSlice
- *      * getConnectionInfo(String, String) -> redacted WifiInfo (strips SSID/BSSID/MAC, preserves link state)
+ *      * getScanResults(String, String):
+ *          - KUROKO_POLICY_SPOOF_WIFI (overrides HIDE_WIFI) -> APEX ParceledListSlice of virtual
+ *            ScanResult entries (including API 33+ WifiSsid and 802.11d Country IE id=7)
+ *          - KUROKO_POLICY_HIDE_WIFI -> empty APEX ParceledListSlice
+ *      * getCountryCode(...):
+ *          - KUROKO_POLICY_SPOOF_WIFI -> virtual rfHeader.wifiCountryIso (e.g. "US"/"JP"/"CN"),
+ *            strictly per target UID without altering real radio regulatory domain
+ *      * getConnectionInfo(String, String):
+ *          - KUROKO_POLICY_SPOOF_WIFI + KUROKO_RF_FLAG_WIFI_SPOOF_CONN + connected virtual AP ->
+ *            spoofed WifiInfo matching virtual AP (otherwise redacted)
+ *          - KUROKO_POLICY_HIDE_WIFI -> redacted WifiInfo
  *  - Channel B: android.net.connectivity.com.android.server.ConnectivityService
  *      * createWithSensitiveInfoSanitizedIfNecessaryWhenParceled(...) -> forces includeLocationInfo = false
- *        for target UIDs with KUROKO_POLICY_HIDE_WIFI, covering both synchronous queries and NetworkCallback!
+ *        for target UIDs with KUROKO_POLICY_HIDE_WIFI or KUROKO_POLICY_SPOOF_WIFI!
  */
 object WifiConnectivityHook {
     private const val TAG = "Kuroko-WifiConn"
@@ -32,6 +41,8 @@ object WifiConnectivityHook {
     private const val CLASS_CONNECTIVITY_SERVICE_LEGACY =
         "com.android.server.ConnectivityService"
 
+    private enum class WifiMode { PASS, HIDE, SPOOF }
+
     private val wifiHooked = AtomicBoolean(false)
     private val connectivityHooked = AtomicBoolean(false)
     private val loggedOnceKeys = ConcurrentHashMap.newKeySet<String>()
@@ -41,6 +52,15 @@ object WifiConnectivityHook {
 
     @Volatile
     private var sliceListCtor: Constructor<*>? = null
+
+    private fun wifiModeForUid(uid: Int): WifiMode {
+        val policy = ShmReader.getTargetPolicy(uid)
+        return when {
+            (policy and ShmReader.KUROKO_POLICY_SPOOF_WIFI) != 0 -> WifiMode.SPOOF
+            (policy and ShmReader.KUROKO_POLICY_HIDE_WIFI) != 0 -> WifiMode.HIDE
+            else -> WifiMode.PASS
+        }
+    }
 
     fun initSystemServer(cl: ClassLoader) {
         // 1. Direct attempt in case APEX classes are already visible
@@ -78,7 +98,7 @@ object WifiConnectivityHook {
             logOnce("hook_cl_factory", "SystemServerClassLoaderFactory hook warning: $t")
         }
 
-        // 3. Capture APEX ClassLoaders via SystemServiceManager.startService(Class) / startServiceFromJar
+        // 3. Capture APEX ClassLoaders via SystemServiceManager.startService(Class)
         try {
             val ssmClass = XposedHelpers.findClassIfExists(
                 "com.android.server.SystemServiceManager",
@@ -109,7 +129,7 @@ object WifiConnectivityHook {
             logOnce("hook_ssm", "SystemServiceManager hook warning: $t")
         }
 
-        // 4. Fallback: catch PathClassLoader / BaseDexClassLoader creation for APEX jars
+        // 4. Fallback: catch PathClassLoader creation for APEX jars
         try {
             val pathClClass = XposedHelpers.findClassIfExists("dalvik.system.PathClassLoader", cl)
             if (pathClClass != null) {
@@ -159,16 +179,28 @@ object WifiConnectivityHook {
                     try {
                         if (param.throwable != null) return
                         val uid = (param.getObjectExtra("kuroko_uid") as? Int) ?: Binder.getCallingUid()
-                        if (!ShmReader.hasPolicy(uid, ShmReader.KUROKO_POLICY_HIDE_WIFI)) return
+                        val mode = wifiModeForUid(uid)
+                        if (mode == WifiMode.PASS) return
 
                         val retType = (param.method as? Method)?.returnType
+                        val items: List<Any> = if (mode == WifiMode.SPOOF) {
+                            val pair = ShmReader.readWifiApsWithHeader()
+                            if (pair != null && pair.second.isNotEmpty()) {
+                                VirtualWifiBuilder.buildScanResults(pair.first, pair.second)
+                            } else {
+                                Collections.emptyList()
+                            }
+                        } else {
+                            Collections.emptyList()
+                        }
+
                         if (retType != null && List::class.java.isAssignableFrom(retType)) {
-                            param.result = Collections.emptyList<Any>()
+                            param.result = items
                             return
                         }
-                        val emptySlice = createEmptyParceledListSlice(retType, wifiCl)
-                        if (emptySlice != null) {
-                            param.result = emptySlice
+                        val slice = createParceledListSlice(retType, wifiCl, items)
+                        if (slice != null) {
+                            param.result = slice
                         }
                     } catch (t: Throwable) {
                         logOnce("wifi_scan_err", "getScanResults hook error: $t")
@@ -177,6 +209,32 @@ object WifiConnectivityHook {
             })
         } catch (t: Throwable) {
             logOnce("hook_wifi_scan", "Failed hooking WifiServiceImpl.getScanResults: $t")
+        }
+
+        // Hook WifiServiceImpl.getCountryCode(...) strictly per target UID (SPOOF_WIFI)
+        try {
+            val countryHooks = XposedBridge.hookAllMethods(wifiClass, "getCountryCode", object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    param.setObjectExtra("kuroko_uid", Binder.getCallingUid())
+                }
+
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    try {
+                        if (param.throwable != null) return
+                        val uid = (param.getObjectExtra("kuroko_uid") as? Int) ?: Binder.getCallingUid()
+                        if (wifiModeForUid(uid) != WifiMode.SPOOF) return
+                        val header = ShmReader.readRfHeader() ?: return
+                        if (header.wifiCountryIso.length == 2) {
+                            param.result = header.wifiCountryIso
+                        }
+                    } catch (t: Throwable) {
+                        logOnce("wifi_cc_err", "getCountryCode hook error: $t")
+                    }
+                }
+            })
+            XposedBridge.log("$TAG: Hooked WifiServiceImpl.getCountryCode (${countryHooks.size})")
+        } catch (t: Throwable) {
+            logOnce("hook_wifi_cc", "Failed hooking WifiServiceImpl.getCountryCode: $t")
         }
 
         // Hook WifiServiceImpl.getConnectionInfo(String, String) (+ any variant overloads)
@@ -190,10 +248,27 @@ object WifiConnectivityHook {
                     try {
                         if (param.throwable != null) return
                         val uid = (param.getObjectExtra("kuroko_uid") as? Int) ?: Binder.getCallingUid()
-                        if (!ShmReader.hasPolicy(uid, ShmReader.KUROKO_POLICY_HIDE_WIFI)) return
+                        val mode = wifiModeForUid(uid)
+                        if (mode == WifiMode.PASS) return
 
                         val orig = param.result as? WifiInfo ?: return
-                        param.result = redactWifiInfo(orig)
+                        if (mode == WifiMode.SPOOF) {
+                            val pair = ShmReader.readWifiApsWithHeader()
+                            val connAp = if (pair != null &&
+                                (pair.first.rfFlags and ShmReader.KUROKO_RF_FLAG_WIFI_SPOOF_CONN) != 0
+                            ) {
+                                pair.second.firstOrNull { it.isConnectedAp }
+                            } else {
+                                null
+                            }
+                            param.result = if (connAp != null) {
+                                VirtualWifiBuilder.buildSpoofedWifiInfo(orig, connAp)
+                            } else {
+                                VirtualWifiBuilder.redactWifiInfo(orig)
+                            }
+                        } else {
+                            param.result = VirtualWifiBuilder.redactWifiInfo(orig)
+                        }
                     } catch (t: Throwable) {
                         logOnce("wifi_conn_err", "getConnectionInfo hook error: $t")
                     }
@@ -224,7 +299,6 @@ object WifiConnectivityHook {
                             val paramTypes = method.parameterTypes
                             val args = param.args ?: return
 
-                            // Verified Android 17 signature:
                             // (NetworkCapabilities, boolean includeLocationInfo, int pid, int uid, String pkg, String attr)
                             var boolIdx = -1
                             var intCount = 0
@@ -235,7 +309,6 @@ object WifiConnectivityHook {
                                     boolIdx = i
                                 } else if (pt == Int::class.javaPrimitiveType) {
                                     intCount++
-                                    // 1st int is pid, 2nd int is uid
                                     if (intCount == 2) {
                                         uidIdx = i
                                     } else if (uidIdx < 0) {
@@ -247,10 +320,11 @@ object WifiConnectivityHook {
                                 return
                             }
                             val includeLoc = args[boolIdx] as? Boolean ?: return
-                            if (!includeLoc) return // Already sanitized
+                            if (!includeLoc) return
 
                             val uid = args[uidIdx] as? Int ?: return
-                            if (ShmReader.hasPolicy(uid, ShmReader.KUROKO_POLICY_HIDE_WIFI)) {
+                            val policy = ShmReader.getTargetPolicy(uid)
+                            if ((policy and (ShmReader.KUROKO_POLICY_HIDE_WIFI or ShmReader.KUROKO_POLICY_SPOOF_WIFI)) != 0) {
                                 args[boolIdx] = false
                             }
                         } catch (t: Throwable) {
@@ -292,8 +366,11 @@ object WifiConnectivityHook {
         }
     }
 
-    private fun createEmptyParceledListSlice(retType: Class<*>?, wifiCl: ClassLoader): Any? {
-        // Ensure factory matches the exact runtime return class (jarjar-relocated ParceledListSlice)
+    private fun createParceledListSlice(
+        retType: Class<*>?,
+        wifiCl: ClassLoader,
+        items: List<Any>
+    ): Any? {
         val targetClass = when {
             retType != null && retType.simpleName.contains("ParceledListSlice") -> retType
             else -> XposedHelpers.findClassIfExists(CLASS_WIFI_PARCELED_LIST_SLICE, wifiCl)
@@ -307,36 +384,20 @@ object WifiConnectivityHook {
                 sliceListCtor = null
                 cacheSliceFactory(targetClass)
             }
-            emptySliceMethod?.let { m ->
-                val res = m.invoke(null)
-                if (res != null && targetClass.isInstance(res)) return res
+            if (items.isEmpty()) {
+                emptySliceMethod?.let { m ->
+                    val res = m.invoke(null)
+                    if (res != null && targetClass.isInstance(res)) return res
+                }
             }
             sliceListCtor?.let { ctor ->
-                val res = ctor.newInstance(Collections.emptyList<Any>())
+                val res = ctor.newInstance(items)
                 if (res != null && targetClass.isInstance(res)) return res
             }
         } catch (t: Throwable) {
-            logOnce("slice_create_err", "Failed creating empty ${targetClass.name}: $t")
+            logOnce("slice_create_err", "Failed creating ${targetClass.name} (size=${items.size}): $t")
         }
         return null
-    }
-
-    private fun redactWifiInfo(orig: WifiInfo): WifiInfo {
-        try {
-            val redactions = orig.applicableRedactions
-            if (redactions != 0L) {
-                return orig.makeCopy(redactions)
-            }
-            return orig.makeCopy(-1L)
-        } catch (_: Throwable) {
-        }
-        return try {
-            val ctor = WifiInfo::class.java.getDeclaredConstructor()
-            ctor.isAccessible = true
-            ctor.newInstance()
-        } catch (_: Throwable) {
-            orig
-        }
     }
 
     private fun logOnce(key: String, msg: String) {

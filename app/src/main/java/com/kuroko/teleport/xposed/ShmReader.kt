@@ -3,6 +3,7 @@ package com.kuroko.teleport.xposed
 import android.annotation.SuppressLint
 import android.os.Binder
 import android.os.Build
+import android.os.IBinder
 import android.os.Parcel
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
@@ -16,11 +17,13 @@ import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Lock-free Seqlock reader for the 16KB KurokoShm memfd pushed by root kuroko_daemon
- * via Binder onTransact to system_server ("location") and com.android.phone ("phone").
+ * Lock-free Seqlock reader for the 16KB KurokoShm v2 memfd pushed by root kuroko_daemon
+ * via Binder onTransact to system_server ("location"), com.android.phone ("phone"),
+ * and com.android.bluetooth (AdapterBinder).
  *
  * Exact byte offsets mirror common/include/kuroko_shm.h (little-endian, packed).
  */
@@ -29,15 +32,19 @@ object ShmReader {
 
     // Protocol & layout constants (common/include/kuroko_shm.h)
     const val KUROKO_SHM_MAGIC = 0x4F52554B
-    const val KUROKO_SHM_VERSION = 1
+    const val KUROKO_SHM_VERSION = 2
     const val KUROKO_SHM_SIZE = 16384
     const val KUROKO_MAX_TARGETS = 32
     const val KUROKO_MAX_SVS = 32
     const val KUROKO_NMEA_BUF_SIZE = 2040
+    const val KUROKO_MAX_CELLS = 8
+    const val KUROKO_MAX_WIFI_APS = 16
+    const val KUROKO_MAX_BLE_DEVS = 16
 
     // Binder transaction codes (within 0x00000001..0x00ffffff for libbinder_ndk)
     const val KUROKO_BINDER_TX_SET_SHM = 0x004B5243
     const val KUROKO_BINDER_TX_PING = 0x004B5250
+    const val KUROKO_BINDER_TX_GET_BT_BINDER = 0x004B5242
     const val KUROKO_ACK_OK = 0x4F4B
 
     // Global flags
@@ -53,6 +60,34 @@ object ShmReader {
     const val KUROKO_POLICY_HIDE_WIFI = 1 shl 3
     const val KUROKO_POLICY_HIDE_CELL = 1 shl 4
     const val KUROKO_POLICY_SUPPRESS_MEAS = 1 shl 5
+    const val KUROKO_POLICY_SPOOF_WIFI = 1 shl 6
+    const val KUROKO_POLICY_SPOOF_CELL = 1 shl 7
+    const val KUROKO_POLICY_HIDE_BLE = 1 shl 8
+    const val KUROKO_POLICY_SPOOF_BLE = 1 shl 9
+
+    // Global RF simulation flags (KurokoRfHeader.rf_flags)
+    const val KUROKO_RF_FLAG_CELL_AUTO = 1 shl 0
+    const val KUROKO_RF_FLAG_WIFI_AUTO = 1 shl 1
+    const val KUROKO_RF_FLAG_WIFI_SPOOF_CONN = 1 shl 2
+    const val KUROKO_RF_FLAG_BLE_AMBIENT = 1 shl 3
+    const val KUROKO_RF_FLAG_SPOOF_SIM_COUNTRY = 1 shl 4
+    const val KUROKO_RF_FLAG_CELL_PREFER_5G = 1 shl 5
+
+    // Cell RAT types & flags
+    const val KUROKO_CELL_RAT_LTE = 1
+    const val KUROKO_CELL_RAT_NR = 2
+    const val KUROKO_CELL_FLAG_USER_PINNED = 1 shl 0
+
+    // Wi-Fi AP flags
+    const val KUROKO_WIFI_FLAG_CONNECTED_AP = 1 shl 0
+    const val KUROKO_WIFI_FLAG_IS_5GHZ = 1 shl 1
+    const val KUROKO_WIFI_FLAG_USER_PINNED = 1 shl 2
+
+    // BLE device types & flags
+    const val KUROKO_BLE_TYPE_GENERIC = 0
+    const val KUROKO_BLE_TYPE_IBEACON = 1
+    const val KUROKO_BLE_FLAG_CONNECTABLE = 1 shl 0
+    const val KUROKO_BLE_FLAG_USER_PINNED = 1 shl 1
 
     // Synthetic GNSS SV flags
     const val KUROKO_SV_HAS_EPHEMERIS = 1 shl 0
@@ -112,6 +147,185 @@ object ShmReader {
     private const val OFF_NMEA_SEQ = 0x940
     private const val OFF_NMEA_LEN = 0x944
     private const val OFF_NMEA_TEXT = 0x948
+
+    // RF Header (0x1140..0x117F, 64B)
+    private const val OFF_RF_HEADER = 0x1140
+    private const val RF_OFF_EPOCH = 0x00
+    private const val RF_OFF_CELL_COUNT = 0x04
+    private const val RF_OFF_WIFI_COUNT = 0x08
+    private const val RF_OFF_BLE_COUNT = 0x0C
+    private const val RF_OFF_FLAGS = 0x10
+    private const val RF_OFF_CARRIER_MCC = 0x14
+    private const val RF_OFF_CARRIER_MNC = 0x16
+    private const val RF_OFF_MNC_DIGITS = 0x18
+    private const val RF_OFF_COUNTRY_ISO = 0x19
+    private const val RF_OFF_WIFI_COUNTRY_ISO = 0x1D
+    private const val RF_OFF_CARRIER_ALPHA = 0x21
+
+    // Virtual Cells (0x1180..0x137F, 8 * 64B = 512B)
+    private const val OFF_RF_CELLS = 0x1180
+    private const val CELL_STRIDE = 64
+    private const val CELL_OFF_RAT = 0x00
+    private const val CELL_OFF_REGISTERED = 0x01
+    private const val CELL_OFF_MNC_DIGITS = 0x02
+    private const val CELL_OFF_FLAGS = 0x03
+    private const val CELL_OFF_MCC = 0x04
+    private const val CELL_OFF_MNC = 0x06
+    private const val CELL_OFF_PCI = 0x08
+    private const val CELL_OFF_BAND = 0x0A
+    private const val CELL_OFF_TAC = 0x0C
+    private const val CELL_OFF_ARFCN = 0x10
+    private const val CELL_OFF_BW_KHZ = 0x14
+    private const val CELL_OFF_CI = 0x18
+    private const val CELL_OFF_RSRP = 0x20
+    private const val CELL_OFF_RSRQ = 0x24
+    private const val CELL_OFF_SINR = 0x28
+    private const val CELL_OFF_TA = 0x2C
+    private const val CELL_OFF_TS_NS = 0x30
+
+    // Virtual Wi-Fi APs (0x1380..0x1B7F, 16 * 128B = 2048B)
+    private const val OFF_RF_WIFIS = 0x1380
+    private const val WIFI_STRIDE = 128
+    private const val WIFI_OFF_BSSID = 0x00
+    private const val WIFI_OFF_FLAGS = 0x06
+    private const val WIFI_OFF_SSID_LEN = 0x07
+    private const val WIFI_OFF_SSID = 0x08
+    private const val WIFI_OFF_CAPABILITIES = 0x28
+    private const val WIFI_OFF_FREQ_MHZ = 0x58
+    private const val WIFI_OFF_RSSI_DBM = 0x5C
+    private const val WIFI_OFF_CH_WIDTH = 0x60
+    private const val WIFI_OFF_CENTER_FREQ0 = 0x64
+    private const val WIFI_OFF_TS_US = 0x68
+    private const val WIFI_OFF_COUNTRY_ISO = 0x70
+
+    // Virtual BLE Devices (0x1B80..0x237F, 16 * 128B = 2048B)
+    private const val OFF_RF_BLES = 0x1B80
+    private const val BLE_STRIDE = 128
+    private const val BLE_OFF_MAC = 0x00
+    private const val BLE_OFF_ADDR_TYPE = 0x06
+    private const val BLE_OFF_DEV_TYPE = 0x07
+    private const val BLE_OFF_FLAGS = 0x08
+    private const val BLE_OFF_NAME_LEN = 0x09
+    private const val BLE_OFF_ADV_LEN = 0x0A
+    private const val BLE_OFF_TX_POWER = 0x0B
+    private const val BLE_OFF_RSSI = 0x0C
+    private const val BLE_OFF_MAJOR = 0x10
+    private const val BLE_OFF_MINOR = 0x12
+    private const val BLE_OFF_UUID = 0x14
+    private const val BLE_OFF_NAME = 0x24
+    private const val BLE_OFF_ADV_BYTES = 0x3C
+
+    data class RfHeader(
+        val rfEpoch: Int,
+        val cellCount: Int,
+        val wifiCount: Int,
+        val bleCount: Int,
+        val rfFlags: Int,
+        val carrierMcc: Int,
+        val carrierMnc: Int,
+        val mncDigits: Int,
+        val countryIso: String,
+        val wifiCountryIso: String,
+        val carrierAlpha: String
+    ) {
+        fun mccString(): String = String.format(Locale.US, "%03d", carrierMcc.coerceIn(0, 999))
+        fun mncString(): String = if (mncDigits >= 3) {
+            String.format(Locale.US, "%03d", carrierMnc.coerceIn(0, 999))
+        } else {
+            String.format(Locale.US, "%02d", carrierMnc.coerceIn(0, 99))
+        }
+        fun operatorNumeric(): String = mccString() + mncString()
+    }
+
+    data class CellEntry(
+        val rat: Int,
+        val registered: Boolean,
+        val mncDigits: Int,
+        val flags: Int,
+        val mcc: Int,
+        val mnc: Int,
+        val pci: Int,
+        val band: Int,
+        val tac: Int,
+        val arfcn: Int,
+        val bandwidthKhz: Int,
+        val ci: Long,
+        val rsrpDbm: Int,
+        val rsrqDb: Int,
+        val sinrDb: Int,
+        val ta: Int,
+        val timestampNs: Long
+    ) {
+        fun mccString(): String = String.format(Locale.US, "%03d", mcc.coerceIn(0, 999))
+        fun mncString(): String = if (mncDigits >= 3) {
+            String.format(Locale.US, "%03d", mnc.coerceIn(0, 999))
+        } else {
+            String.format(Locale.US, "%02d", mnc.coerceIn(0, 99))
+        }
+        fun operatorNumeric(): String = mccString() + mncString()
+    }
+
+    data class WifiApEntry(
+        val bssid: ByteArray,
+        val flags: Int,
+        val ssid: String,
+        val ssidBytes: ByteArray,
+        val capabilities: String,
+        val frequencyMhz: Int,
+        val rssiDbm: Int,
+        val channelWidth: Int,
+        val centerFreq0Mhz: Int,
+        val timestampUs: Long,
+        val countryIso: String
+    ) {
+        val isConnectedAp: Boolean get() = (flags and KUROKO_WIFI_FLAG_CONNECTED_AP) != 0
+        val is5Ghz: Boolean get() = (flags and KUROKO_WIFI_FLAG_IS_5GHZ) != 0 || frequencyMhz >= 5000
+
+        fun bssidString(): String {
+            if (bssid.size < 6) return "02:00:00:00:00:00"
+            return String.format(
+                Locale.US,
+                "%02x:%02x:%02x:%02x:%02x:%02x",
+                bssid[0].toInt() and 0xFF,
+                bssid[1].toInt() and 0xFF,
+                bssid[2].toInt() and 0xFF,
+                bssid[3].toInt() and 0xFF,
+                bssid[4].toInt() and 0xFF,
+                bssid[5].toInt() and 0xFF
+            )
+        }
+    }
+
+    data class BleDeviceEntry(
+        val mac: ByteArray,
+        val addrType: Int,
+        val deviceType: Int,
+        val flags: Int,
+        val txPowerDbm: Byte,
+        val rssiDbm: Int,
+        val major: Int,
+        val minor: Int,
+        val uuid: ByteArray,
+        val name: String,
+        val advBytes: ByteArray
+    ) {
+        val isConnectable: Boolean get() = (flags and KUROKO_BLE_FLAG_CONNECTABLE) != 0
+        val isIBeacon: Boolean get() = deviceType == KUROKO_BLE_TYPE_IBEACON
+
+        fun macString(): String {
+            if (mac.size < 6) return "02:00:00:00:00:00"
+            return String.format(
+                Locale.US,
+                "%02X:%02X:%02X:%02X:%02X:%02X",
+                mac[0].toInt() and 0xFF,
+                mac[1].toInt() and 0xFF,
+                mac[2].toInt() and 0xFF,
+                mac[3].toInt() and 0xFF,
+                mac[4].toInt() and 0xFF,
+                mac[5].toInt() and 0xFF
+            )
+        }
+    }
 
     data class TargetEntry(
         val uid: Int,
@@ -178,6 +392,9 @@ object ShmReader {
     private var mappedBuffer: MappedByteBuffer? = null
 
     @Volatile
+    var cachedBluetoothBinder: IBinder? = null
+
+    @Volatile
     private var lastLoggedSensorHookProp: String = UNLOGGED_SENTINEL
 
     private val mapLock = Any()
@@ -235,7 +452,10 @@ object ShmReader {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     try {
                         val code = param.args[0] as Int
-                        if (code != KUROKO_BINDER_TX_SET_SHM && code != KUROKO_BINDER_TX_PING) {
+                        if (code != KUROKO_BINDER_TX_SET_SHM &&
+                            code != KUROKO_BINDER_TX_PING &&
+                            code != KUROKO_BINDER_TX_GET_BT_BINDER
+                        ) {
                             return
                         }
                         if (!svcClass.isInstance(param.thisObject)) {
@@ -260,7 +480,7 @@ object ShmReader {
     }
 
     /**
-     * Handles root-only Kuroko Teleport Binder transactions (SET_SHM and PING).
+     * Handles root-only Kuroko Teleport Binder transactions (SET_SHM, PING, GET_BT_BINDER).
      * Supports standard libbinder_ndk interface-token-prefixed parcels via enforceInterface()
      * as well as raw parcels without interface token as fallback.
      */
@@ -270,7 +490,10 @@ object ShmReader {
         reply: Parcel?,
         expectedInterface: String
     ): Boolean {
-        if (code != KUROKO_BINDER_TX_SET_SHM && code != KUROKO_BINDER_TX_PING) {
+        if (code != KUROKO_BINDER_TX_SET_SHM &&
+            code != KUROKO_BINDER_TX_PING &&
+            code != KUROKO_BINDER_TX_GET_BT_BINDER
+        ) {
             return false
         }
         // Strictly root-only (UID 0 = kuroko_daemon)
@@ -279,6 +502,29 @@ object ShmReader {
         }
 
         val startPos = data.dataPosition()
+        if (code == KUROKO_BINDER_TX_GET_BT_BINDER) {
+            if (expectedInterface != "android.location.ILocationManager") {
+                return false
+            }
+            if (!verifyGetBtBinderParcel(data, startPos, expectedInterface)) {
+                data.setDataPosition(startPos)
+                return false
+            }
+            val bt = cachedBluetoothBinder?.takeIf {
+                try {
+                    it.isBinderAlive
+                } catch (_: Throwable) {
+                    false
+                }
+            }
+            if (bt == null && cachedBluetoothBinder != null) {
+                cachedBluetoothBinder = null
+            }
+            reply?.writeNoException()
+            reply?.writeStrongBinder(bt)
+            return true
+        }
+
         val magic = readMagicWithInterfaceFallback(data, startPos, expectedInterface)
         if (magic != KUROKO_SHM_MAGIC) {
             data.setDataPosition(startPos)
@@ -790,5 +1036,282 @@ object ShmReader {
             }
         }
         return null
+    }
+
+    private fun verifyGetBtBinderParcel(
+        data: Parcel,
+        startPos: Int,
+        expectedInterface: String
+    ): Boolean {
+        try {
+            data.enforceInterface(expectedInterface)
+            if (data.dataAvail() >= 4) {
+                return data.readInt() == KUROKO_SHM_MAGIC
+            }
+            return true
+        } catch (_: Throwable) {
+        }
+        return try {
+            data.setDataPosition(startPos)
+            data.dataAvail() >= 4 && data.readInt() == KUROKO_SHM_MAGIC
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    // ==================== SHM v2 RF Snapshot Readers ====================
+
+    private fun readRfHeaderLocked(buf: MappedByteBuffer): RfHeader {
+        val base = OFF_RF_HEADER
+        return RfHeader(
+            rfEpoch = buf.getInt(base + RF_OFF_EPOCH),
+            cellCount = buf.getInt(base + RF_OFF_CELL_COUNT).coerceIn(0, KUROKO_MAX_CELLS),
+            wifiCount = buf.getInt(base + RF_OFF_WIFI_COUNT).coerceIn(0, KUROKO_MAX_WIFI_APS),
+            bleCount = buf.getInt(base + RF_OFF_BLE_COUNT).coerceIn(0, KUROKO_MAX_BLE_DEVS),
+            rfFlags = buf.getInt(base + RF_OFF_FLAGS),
+            carrierMcc = buf.getShort(base + RF_OFF_CARRIER_MCC).toInt() and 0xFFFF,
+            carrierMnc = buf.getShort(base + RF_OFF_CARRIER_MNC).toInt() and 0xFFFF,
+            mncDigits = (buf.get(base + RF_OFF_MNC_DIGITS).toInt() and 0xFF).coerceIn(2, 3),
+            countryIso = readCString(buf, base + RF_OFF_COUNTRY_ISO, 4).lowercase(Locale.US),
+            wifiCountryIso = readCString(buf, base + RF_OFF_WIFI_COUNTRY_ISO, 4).uppercase(Locale.US),
+            carrierAlpha = readCString(buf, base + RF_OFF_CARRIER_ALPHA, 16)
+        )
+    }
+
+    fun readRfHeader(): RfHeader? {
+        val buf = mappedBuffer ?: return null
+        for (attempt in 0 until MAX_SEQLOCK_TRIES) {
+            val s1 = buf.getInt(OFF_SEQ)
+            if ((s1 and 1) != 0) continue
+            acquireFence()
+
+            val magic = buf.getInt(OFF_MAGIC)
+            val version = buf.getInt(OFF_VERSION)
+            val active = buf.getInt(OFF_ACTIVE)
+            val heartbeatNs = buf.getLong(OFF_DAEMON_HEARTBEAT_NS)
+            val rfHeader = if (active != 0) readRfHeaderLocked(buf) else null
+
+            acquireFence()
+            val s2 = buf.getInt(OFF_SEQ)
+            if (s1 == s2) {
+                if (magic != KUROKO_SHM_MAGIC || version != KUROKO_SHM_VERSION) return null
+                if (active == 0 || !isHeartbeatFresh(heartbeatNs)) return null
+                return rfHeader
+            }
+        }
+        return null
+    }
+
+    fun readCells(): List<CellEntry> = readCellsWithHeader()?.second ?: emptyList()
+
+    fun readCellsWithHeader(): Pair<RfHeader, List<CellEntry>>? {
+        val buf = mappedBuffer ?: return null
+        for (attempt in 0 until MAX_SEQLOCK_TRIES) {
+            val s1 = buf.getInt(OFF_SEQ)
+            if ((s1 and 1) != 0) continue
+            acquireFence()
+
+            val magic = buf.getInt(OFF_MAGIC)
+            val version = buf.getInt(OFF_VERSION)
+            val active = buf.getInt(OFF_ACTIVE)
+            val heartbeatNs = buf.getLong(OFF_DAEMON_HEARTBEAT_NS)
+
+            var header: RfHeader? = null
+            var cells: ArrayList<CellEntry>? = null
+            if (active != 0) {
+                val h = readRfHeaderLocked(buf)
+                header = h
+                val list = ArrayList<CellEntry>(h.cellCount)
+                for (i in 0 until h.cellCount) {
+                    val base = OFF_RF_CELLS + i * CELL_STRIDE
+                    list.add(
+                        CellEntry(
+                            rat = buf.get(base + CELL_OFF_RAT).toInt() and 0xFF,
+                            registered = (buf.get(base + CELL_OFF_REGISTERED).toInt() and 0xFF) != 0,
+                            mncDigits = (buf.get(base + CELL_OFF_MNC_DIGITS).toInt() and 0xFF).coerceIn(2, 3),
+                            flags = buf.get(base + CELL_OFF_FLAGS).toInt() and 0xFF,
+                            mcc = buf.getShort(base + CELL_OFF_MCC).toInt() and 0xFFFF,
+                            mnc = buf.getShort(base + CELL_OFF_MNC).toInt() and 0xFFFF,
+                            pci = buf.getShort(base + CELL_OFF_PCI).toInt() and 0xFFFF,
+                            band = buf.getShort(base + CELL_OFF_BAND).toInt() and 0xFFFF,
+                            tac = buf.getInt(base + CELL_OFF_TAC),
+                            arfcn = buf.getInt(base + CELL_OFF_ARFCN),
+                            bandwidthKhz = buf.getInt(base + CELL_OFF_BW_KHZ),
+                            ci = buf.getLong(base + CELL_OFF_CI),
+                            rsrpDbm = buf.getInt(base + CELL_OFF_RSRP),
+                            rsrqDb = buf.getInt(base + CELL_OFF_RSRQ),
+                            sinrDb = buf.getInt(base + CELL_OFF_SINR),
+                            ta = buf.getInt(base + CELL_OFF_TA),
+                            timestampNs = buf.getLong(base + CELL_OFF_TS_NS)
+                        )
+                    )
+                }
+                cells = list
+            }
+
+            acquireFence()
+            val s2 = buf.getInt(OFF_SEQ)
+            if (s1 == s2) {
+                if (magic != KUROKO_SHM_MAGIC || version != KUROKO_SHM_VERSION) return null
+                if (active == 0 || !isHeartbeatFresh(heartbeatNs)) return null
+                if (header != null && cells != null) return Pair(header, cells)
+                return null
+            }
+        }
+        return null
+    }
+
+    fun readWifiAps(): List<WifiApEntry> = readWifiApsWithHeader()?.second ?: emptyList()
+
+    fun readWifiApsWithHeader(): Pair<RfHeader, List<WifiApEntry>>? {
+        val buf = mappedBuffer ?: return null
+        for (attempt in 0 until MAX_SEQLOCK_TRIES) {
+            val s1 = buf.getInt(OFF_SEQ)
+            if ((s1 and 1) != 0) continue
+            acquireFence()
+
+            val magic = buf.getInt(OFF_MAGIC)
+            val version = buf.getInt(OFF_VERSION)
+            val active = buf.getInt(OFF_ACTIVE)
+            val heartbeatNs = buf.getLong(OFF_DAEMON_HEARTBEAT_NS)
+
+            var header: RfHeader? = null
+            var aps: ArrayList<WifiApEntry>? = null
+            if (active != 0) {
+                val h = readRfHeaderLocked(buf)
+                header = h
+                val list = ArrayList<WifiApEntry>(h.wifiCount)
+                for (i in 0 until h.wifiCount) {
+                    val base = OFF_RF_WIFIS + i * WIFI_STRIDE
+                    val bssid = readBytes(buf, base + WIFI_OFF_BSSID, 6)
+                    val flags = buf.get(base + WIFI_OFF_FLAGS).toInt() and 0xFF
+                    val ssidLen = (buf.get(base + WIFI_OFF_SSID_LEN).toInt() and 0xFF).coerceIn(0, 32)
+                    val ssidBytes = readBytes(buf, base + WIFI_OFF_SSID, ssidLen)
+                    val ssid = String(ssidBytes, StandardCharsets.UTF_8)
+                    val capabilities = readCString(buf, base + WIFI_OFF_CAPABILITIES, 48)
+                    val freq = buf.getInt(base + WIFI_OFF_FREQ_MHZ)
+                    val rssi = buf.getInt(base + WIFI_OFF_RSSI_DBM)
+                    val chWidth = buf.getInt(base + WIFI_OFF_CH_WIDTH)
+                    val centerFreq0 = buf.getInt(base + WIFI_OFF_CENTER_FREQ0)
+                    val tsUs = buf.getLong(base + WIFI_OFF_TS_US)
+                    val countryIso = readCString(buf, base + WIFI_OFF_COUNTRY_ISO, 4).uppercase(Locale.US)
+                    list.add(
+                        WifiApEntry(
+                            bssid = bssid,
+                            flags = flags,
+                            ssid = ssid,
+                            ssidBytes = ssidBytes,
+                            capabilities = capabilities,
+                            frequencyMhz = freq,
+                            rssiDbm = rssi,
+                            channelWidth = chWidth,
+                            centerFreq0Mhz = centerFreq0,
+                            timestampUs = tsUs,
+                            countryIso = countryIso
+                        )
+                    )
+                }
+                aps = list
+            }
+
+            acquireFence()
+            val s2 = buf.getInt(OFF_SEQ)
+            if (s1 == s2) {
+                if (magic != KUROKO_SHM_MAGIC || version != KUROKO_SHM_VERSION) return null
+                if (active == 0 || !isHeartbeatFresh(heartbeatNs)) return null
+                if (header != null && aps != null) return Pair(header, aps)
+                return null
+            }
+        }
+        return null
+    }
+
+    fun readBleDevices(): List<BleDeviceEntry> = readBleDevicesWithHeader()?.second ?: emptyList()
+
+    fun readBleDevicesWithHeader(): Pair<RfHeader, List<BleDeviceEntry>>? {
+        val buf = mappedBuffer ?: return null
+        for (attempt in 0 until MAX_SEQLOCK_TRIES) {
+            val s1 = buf.getInt(OFF_SEQ)
+            if ((s1 and 1) != 0) continue
+            acquireFence()
+
+            val magic = buf.getInt(OFF_MAGIC)
+            val version = buf.getInt(OFF_VERSION)
+            val active = buf.getInt(OFF_ACTIVE)
+            val heartbeatNs = buf.getLong(OFF_DAEMON_HEARTBEAT_NS)
+
+            var header: RfHeader? = null
+            var devs: ArrayList<BleDeviceEntry>? = null
+            if (active != 0) {
+                val h = readRfHeaderLocked(buf)
+                header = h
+                val list = ArrayList<BleDeviceEntry>(h.bleCount)
+                for (i in 0 until h.bleCount) {
+                    val base = OFF_RF_BLES + i * BLE_STRIDE
+                    val mac = readBytes(buf, base + BLE_OFF_MAC, 6)
+                    val addrType = buf.get(base + BLE_OFF_ADDR_TYPE).toInt() and 0xFF
+                    val devType = buf.get(base + BLE_OFF_DEV_TYPE).toInt() and 0xFF
+                    val flags = buf.get(base + BLE_OFF_FLAGS).toInt() and 0xFF
+                    val nameLen = (buf.get(base + BLE_OFF_NAME_LEN).toInt() and 0xFF).coerceIn(0, 24)
+                    val advLen = (buf.get(base + BLE_OFF_ADV_LEN).toInt() and 0xFF).coerceIn(0, 62)
+                    val txPower = buf.get(base + BLE_OFF_TX_POWER)
+                    val rssi = buf.getInt(base + BLE_OFF_RSSI)
+                    val major = buf.getShort(base + BLE_OFF_MAJOR).toInt() and 0xFFFF
+                    val minor = buf.getShort(base + BLE_OFF_MINOR).toInt() and 0xFFFF
+                    val uuid = readBytes(buf, base + BLE_OFF_UUID, 16)
+                    val nameBytes = readBytes(buf, base + BLE_OFF_NAME, nameLen)
+                    val name = String(nameBytes, StandardCharsets.UTF_8)
+                    val advBytes = readBytes(buf, base + BLE_OFF_ADV_BYTES, advLen)
+                    list.add(
+                        BleDeviceEntry(
+                            mac = mac,
+                            addrType = addrType,
+                            deviceType = devType,
+                            flags = flags,
+                            txPowerDbm = txPower,
+                            rssiDbm = rssi,
+                            major = major,
+                            minor = minor,
+                            uuid = uuid,
+                            name = name,
+                            advBytes = advBytes
+                        )
+                    )
+                }
+                devs = list
+            }
+
+            acquireFence()
+            val s2 = buf.getInt(OFF_SEQ)
+            if (s1 == s2) {
+                if (magic != KUROKO_SHM_MAGIC || version != KUROKO_SHM_VERSION) return null
+                if (active == 0 || !isHeartbeatFresh(heartbeatNs)) return null
+                if (header != null && devs != null) return Pair(header, devs)
+                return null
+            }
+        }
+        return null
+    }
+
+    private fun readBytes(buf: MappedByteBuffer, offset: Int, len: Int): ByteArray {
+        if (len <= 0) return ByteArray(0)
+        val out = ByteArray(len)
+        for (i in 0 until len) {
+            out[i] = buf.get(offset + i)
+        }
+        return out
+    }
+
+    private fun readCString(buf: MappedByteBuffer, offset: Int, maxLen: Int): String {
+        if (maxLen <= 0) return ""
+        val tmp = ByteArray(maxLen)
+        var n = 0
+        while (n < maxLen) {
+            val b = buf.get(offset + n)
+            if (b.toInt() == 0) break
+            tmp[n] = b
+            n++
+        }
+        return if (n == 0) "" else String(tmp, 0, n, StandardCharsets.UTF_8)
     }
 }

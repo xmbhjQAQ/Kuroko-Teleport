@@ -1,35 +1,59 @@
 package com.kuroko.teleport.xposed
 
 import android.os.Binder
+import android.os.Bundle
+import android.os.IBinder
+import android.os.IInterface
+import android.telephony.ServiceState
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.util.Collections
+import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Dual-process Telephony / Cell-Tower isolation hooks for Android 17 / HyperOS 4:
+ * Dual-process Telephony / Cell-Tower isolation & virtualization hooks for Android 12–17:
  *  1. com.android.phone (TeleService.apk):
- *     - PhoneInterfaceManager.onTransact: receives root daemon SHM memfd & ping
- *     - getAllCellInfo, getCellLocation, getLastKnownCellIdentity, getNeighboringCellInfo,
- *       requestCellInfoUpdate* -> returns empty / null for target UIDs with KUROKO_POLICY_HIDE_CELL
+ *     - PhoneInterfaceManager.onTransact: receives root daemon SHM v2 memfd & ping
+ *     - SPOOF_CELL (overrides HIDE_CELL): synthesizes authentic LTE/5G NR CellInfo lists,
+ *       serving CellIdentity / GsmCellLocation Bundle, ServiceState operator/cell rewrite,
+ *       and per-UID network/SIM operator & country ISO getters
+ *     - HIDE_CELL (without SPOOF_CELL): returns empty list / null
  *  2. system_server (services.jar):
- *     - TelephonyRegistry: blocks real cell info / cell location broadcasts & cached replays
- *       specifically for target UIDs with KUROKO_POLICY_HIDE_CELL while keeping non-target
- *       apps and system components untouched
+ *     - TelephonyRegistry:
+ *         * HIDE_CELL && !SPOOF_CELL -> checkFineLocationAccess / checkCoarseLocationAccess = false
+ *         * SPOOF_CELL -> intercepts per-Record IPhoneStateListener callback dispatch
+ *           (onCellInfoChanged, onCellLocationChanged, onServiceStateChanged) strictly by
+ *           Record.callerUid without ever mutating global mCellInfo / mCellIdentity / mServiceState
  */
 object TelephonyHook {
     private const val TAG = "Kuroko-Tel"
     private const val TELEPHONY_INTERFACE = "com.android.internal.telephony.ITelephony"
 
+    private enum class CellMode { PASS, HIDE, SPOOF }
+
     private val loggedOnceKeys = ConcurrentHashMap.newKeySet<String>()
     private val fieldCache = ConcurrentHashMap<String, Field>()
     private val methodCache = ConcurrentHashMap<String, Method>()
 
+    // Weak map from IPhoneStateListener IBinder -> callerUid (auto-cleaned on listener GC)
+    private val callbackBinderToUid = Collections.synchronizedMap(WeakHashMap<IBinder, Int>())
+
     // Fallback context flag for TelephonyRegistry if checkFineLocationAccess/checkCoarseLocationAccess are absent
     private val inCellNotify = ThreadLocal.withInitial { false }
+
+    private fun cellModeForUid(uid: Int): CellMode {
+        if (uid <= 0) return CellMode.PASS
+        val policy = ShmReader.getTargetPolicy(uid)
+        return when {
+            (policy and ShmReader.KUROKO_POLICY_SPOOF_CELL) != 0 -> CellMode.SPOOF
+            (policy and ShmReader.KUROKO_POLICY_HIDE_CELL) != 0 -> CellMode.HIDE
+            else -> CellMode.PASS
+        }
+    }
 
     // ==================== Process 1: com.android.phone ====================
 
@@ -50,17 +74,128 @@ object TelephonyHook {
             return
         }
 
-        // 2. getAllCellInfo -> empty list for target UIDs
-        hookReturnEmptyList(pimClass, "getAllCellInfo")
+        // 2. getAllCellInfo -> virtual CellInfo list (SPOOF_CELL) or empty list (HIDE_CELL)
+        hookGetAllCellInfo(pimClass)
 
-        // 3. getNeighboringCellInfo (legacy, if present) -> empty list for target UIDs
-        hookReturnEmptyList(pimClass, "getNeighboringCellInfo")
+        // 3. getNeighboringCellInfo (legacy, if present) -> empty list for HIDE/SPOOF
+        hookLegacyEmptyList(pimClass, "getNeighboringCellInfo")
 
-        // 4. getCellLocation / getLastKnownCellIdentity -> null for target UIDs
-        hookReturnNull(pimClass, "getCellLocation")
-        hookReturnNull(pimClass, "getLastKnownCellIdentity")
+        // 4. getCellLocation / getLastKnownCellIdentity -> serving cell (SPOOF_CELL) or null (HIDE_CELL)
+        hookServingCellMethod(pimClass, "getCellLocation")
+        hookServingCellMethod(pimClass, "getLastKnownCellIdentity")
 
-        // 5. requestCellInfoUpdate / requestCellInfoUpdateWithWorkSource -> invoke callback with empty list
+        // 5. requestCellInfoUpdate / requestCellInfoUpdateWithWorkSource
+        hookRequestCellInfoUpdate(pimClass)
+
+        // 6. Per-UID network/SIM operator & country ISO + ServiceState getters (SPOOF_CELL only)
+        hookOperatorAndCountryGetters(pimClass)
+    }
+
+    private fun hookGetAllCellInfo(pimClass: Class<*>) {
+        try {
+            val hooks = XposedBridge.hookAllMethods(pimClass, "getAllCellInfo", object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    param.setObjectExtra("kuroko_uid", Binder.getCallingUid())
+                }
+
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    try {
+                        if (param.throwable != null) return
+                        val uid = (param.getObjectExtra("kuroko_uid") as? Int) ?: Binder.getCallingUid()
+                        when (cellModeForUid(uid)) {
+                            CellMode.PASS -> return
+                            CellMode.HIDE -> param.result = Collections.emptyList<Any>()
+                            CellMode.SPOOF -> {
+                                val pair = ShmReader.readCellsWithHeader()
+                                param.result = if (pair != null && pair.second.isNotEmpty()) {
+                                    VirtualCellBuilder.buildCellInfoList(pair.first, pair.second)
+                                } else {
+                                    Collections.emptyList<Any>()
+                                }
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        logOnce("tel_all_cell", "getAllCellInfo hook error: $t")
+                    }
+                }
+            })
+            if (hooks.isNotEmpty()) {
+                XposedBridge.log("$TAG: Hooked PhoneInterfaceManager.getAllCellInfo (${hooks.size})")
+            }
+        } catch (t: Throwable) {
+            logOnce("hook_all_cell", "Failed hooking getAllCellInfo: $t")
+        }
+    }
+
+    private fun hookServingCellMethod(pimClass: Class<*>, methodName: String) {
+        try {
+            val hooks = XposedBridge.hookAllMethods(pimClass, methodName, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    param.setObjectExtra("kuroko_uid", Binder.getCallingUid())
+                }
+
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    try {
+                        if (param.throwable != null) return
+                        val uid = (param.getObjectExtra("kuroko_uid") as? Int) ?: Binder.getCallingUid()
+                        when (cellModeForUid(uid)) {
+                            CellMode.PASS -> return
+                            CellMode.HIDE -> param.result = null
+                            CellMode.SPOOF -> {
+                                val pair = ShmReader.readCellsWithHeader()
+                                if (pair == null || pair.second.isEmpty()) {
+                                    param.result = null
+                                    return
+                                }
+                                val retType = (param.method as? Method)?.returnType
+                                param.result = if (retType != null && Bundle::class.java.isAssignableFrom(retType)) {
+                                    VirtualCellBuilder.buildGsmCellLocationBundle(pair.second)
+                                } else {
+                                    VirtualCellBuilder.buildServingCellIdentity(pair.first, pair.second)
+                                }
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        logOnce("tel_serving_$methodName", "$methodName hook error: $t")
+                    }
+                }
+            })
+            if (hooks.isNotEmpty()) {
+                XposedBridge.log("$TAG: Hooked PhoneInterfaceManager.$methodName (${hooks.size})")
+            }
+        } catch (t: Throwable) {
+            logOnce("hook_tel_$methodName", "Failed hooking $methodName: $t")
+        }
+    }
+
+    private fun hookLegacyEmptyList(cls: Class<*>, methodName: String) {
+        try {
+            val hooks = XposedBridge.hookAllMethods(cls, methodName, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    param.setObjectExtra("kuroko_uid", Binder.getCallingUid())
+                }
+
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    try {
+                        if (param.throwable != null) return
+                        val uid = (param.getObjectExtra("kuroko_uid") as? Int) ?: Binder.getCallingUid()
+                        if (cellModeForUid(uid) != CellMode.PASS) {
+                            param.result = Collections.emptyList<Any>()
+                        }
+                    } catch (t: Throwable) {
+                        logOnce("tel_empty_$methodName", "$methodName hook error: $t")
+                    }
+                }
+            })
+            if (hooks.isNotEmpty()) {
+                XposedBridge.log("$TAG: Hooked ${cls.simpleName}.$methodName (${hooks.size})")
+            }
+        } catch (t: Throwable) {
+            logOnce("hook_tel_$methodName", "Failed hooking $methodName: $t")
+        }
+    }
+
+    private fun hookRequestCellInfoUpdate(pimClass: Class<*>) {
         var hookedReqCount = 0
         try {
             for (m in pimClass.declaredMethods) {
@@ -69,9 +204,20 @@ object TelephonyHook {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         try {
                             val uid = Binder.getCallingUid()
-                            if (!ShmReader.hasPolicy(uid, ShmReader.KUROKO_POLICY_HIDE_CELL)) return
+                            val mode = cellModeForUid(uid)
+                            if (mode == CellMode.PASS) return
 
-                            // Deliver empty list to ICellInfoCallback if present so caller does not hang
+                            val payload: List<Any> = if (mode == CellMode.SPOOF) {
+                                val pair = ShmReader.readCellsWithHeader()
+                                if (pair != null && pair.second.isNotEmpty()) {
+                                    VirtualCellBuilder.buildCellInfoList(pair.first, pair.second)
+                                } else {
+                                    Collections.emptyList()
+                                }
+                            } else {
+                                Collections.emptyList()
+                            }
+
                             val args = param.args
                             if (args != null) {
                                 for (arg in args) {
@@ -79,7 +225,7 @@ object TelephonyHook {
                                     val onCellInfo = findMethodByName(arg.javaClass, "onCellInfo", 1)
                                     if (onCellInfo != null) {
                                         try {
-                                            onCellInfo.invoke(arg, Collections.emptyList<Any>())
+                                            onCellInfo.invoke(arg, payload)
                                         } catch (_: Throwable) {
                                         }
                                         break
@@ -97,64 +243,107 @@ object TelephonyHook {
         } catch (t: Throwable) {
             logOnce("hook_req_cell", "Failed hooking requestCellInfoUpdate*: $t")
         }
-
         XposedBridge.log(
             "$TAG: Hooked PhoneInterfaceManager (requestCellInfoUpdate* methods=$hookedReqCount)"
         )
     }
 
-    private fun hookReturnEmptyList(cls: Class<*>, methodName: String) {
-        try {
-            val hooks = XposedBridge.hookAllMethods(cls, methodName, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    param.setObjectExtra("kuroko_uid", Binder.getCallingUid())
-                }
+    private fun hookOperatorAndCountryGetters(pimClass: Class<*>) {
+        val netNumericNames = setOf("getNetworkOperator", "getNetworkOperatorForPhone")
+        val netCountryNames = setOf(
+            "getNetworkCountryIso",
+            "getNetworkCountryIsoForPhone",
+            "getNetworkCountryIsoForSubscription"
+        )
+        val netAlphaNames = setOf("getNetworkOperatorName", "getNetworkOperatorNameForPhone")
+        val simCountryNames = setOf("getSimCountryIso", "getSimCountryIsoForPhone")
+        val simNumericNames = setOf(
+            "getSimOperator",
+            "getSimOperatorNumeric",
+            "getSimOperatorNumericForPhone"
+        )
+        val simAlphaNames = setOf(
+            "getSimOperatorName",
+            "getSimOperatorNameForPhone",
+            "getSimOperatorNameForSubId"
+        )
+        val serviceStateNames = setOf("getServiceStateForSubscriber", "getServiceState")
 
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    try {
-                        if (param.throwable != null) return
-                        val uid = (param.getObjectExtra("kuroko_uid") as? Int) ?: Binder.getCallingUid()
-                        if (ShmReader.hasPolicy(uid, ShmReader.KUROKO_POLICY_HIDE_CELL)) {
-                            param.result = Collections.emptyList<Any>()
-                        }
-                    } catch (t: Throwable) {
-                        logOnce("tel_empty_$methodName", "$methodName hook error: $t")
-                    }
+        var hookedIdentityCount = 0
+        try {
+            val presentNames = HashSet<String>()
+            var cur: Class<*>? = pimClass
+            while (cur != null && cur != Any::class.java) {
+                for (m in cur.declaredMethods) {
+                    presentNames.add(m.name)
                 }
-            })
-            if (hooks.isNotEmpty()) {
-                XposedBridge.log("$TAG: Hooked ${cls.simpleName}.$methodName (${hooks.size})")
+                cur = cur.superclass
+            }
+
+            fun hookStringGetter(name: String, requireSimFlag: Boolean, extractor: (ShmReader.RfHeader) -> String) {
+                if (name !in presentNames) return
+                val hooks = XposedBridge.hookAllMethods(pimClass, name, object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        param.setObjectExtra("kuroko_uid", Binder.getCallingUid())
+                    }
+
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        try {
+                            if (param.throwable != null) return
+                            val uid = (param.getObjectExtra("kuroko_uid") as? Int) ?: Binder.getCallingUid()
+                            if (cellModeForUid(uid) != CellMode.SPOOF) return
+                            val header = ShmReader.readRfHeader() ?: return
+                            if (requireSimFlag &&
+                                (header.rfFlags and ShmReader.KUROKO_RF_FLAG_SPOOF_SIM_COUNTRY) == 0
+                            ) {
+                                return
+                            }
+                            val value = extractor(header)
+                            if (value.isNotEmpty()) {
+                                param.result = value
+                            }
+                        } catch (t: Throwable) {
+                            logOnce("tel_id_$name", "$name hook error: $t")
+                        }
+                    }
+                })
+                hookedIdentityCount += hooks.size
+            }
+
+            for (n in netNumericNames) hookStringGetter(n, false) { it.operatorNumeric() }
+            for (n in netCountryNames) hookStringGetter(n, false) { it.countryIso }
+            for (n in netAlphaNames) hookStringGetter(n, false) { it.carrierAlpha }
+            for (n in simCountryNames) hookStringGetter(n, true) { it.countryIso }
+            for (n in simNumericNames) hookStringGetter(n, true) { it.operatorNumeric() }
+            for (n in simAlphaNames) hookStringGetter(n, true) { it.carrierAlpha }
+
+            for (n in serviceStateNames) {
+                if (n !in presentNames) continue
+                val hooks = XposedBridge.hookAllMethods(pimClass, n, object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        param.setObjectExtra("kuroko_uid", Binder.getCallingUid())
+                    }
+
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        try {
+                            if (param.throwable != null) return
+                            val orig = param.result as? ServiceState ?: return
+                            val uid = (param.getObjectExtra("kuroko_uid") as? Int) ?: Binder.getCallingUid()
+                            if (cellModeForUid(uid) != CellMode.SPOOF) return
+                            val pair = ShmReader.readCellsWithHeader() ?: return
+                            val serving = VirtualCellBuilder.buildServingCellIdentity(pair.first, pair.second)
+                            param.result = VirtualCellBuilder.rewriteServiceState(orig, pair.first, serving)
+                        } catch (t: Throwable) {
+                            logOnce("tel_ss_$n", "$n hook error: $t")
+                        }
+                    }
+                })
+                hookedIdentityCount += hooks.size
             }
         } catch (t: Throwable) {
-            logOnce("hook_tel_$methodName", "Failed hooking $methodName: $t")
+            logOnce("hook_tel_id", "Failed hooking PhoneInterfaceManager operator/country getters: $t")
         }
-    }
-
-    private fun hookReturnNull(cls: Class<*>, methodName: String) {
-        try {
-            val hooks = XposedBridge.hookAllMethods(cls, methodName, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    param.setObjectExtra("kuroko_uid", Binder.getCallingUid())
-                }
-
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    try {
-                        if (param.throwable != null) return
-                        val uid = (param.getObjectExtra("kuroko_uid") as? Int) ?: Binder.getCallingUid()
-                        if (ShmReader.hasPolicy(uid, ShmReader.KUROKO_POLICY_HIDE_CELL)) {
-                            param.result = null
-                        }
-                    } catch (t: Throwable) {
-                        logOnce("tel_null_$methodName", "$methodName hook error: $t")
-                    }
-                }
-            })
-            if (hooks.isNotEmpty()) {
-                XposedBridge.log("$TAG: Hooked ${cls.simpleName}.$methodName (${hooks.size})")
-            }
-        } catch (t: Throwable) {
-            logOnce("hook_tel_$methodName", "Failed hooking $methodName: $t")
-        }
+        XposedBridge.log("$TAG: Hooked PhoneInterfaceManager identity/ServiceState getters ($hookedIdentityCount)")
     }
 
     // ==================== Process 2: system_server ====================
@@ -169,10 +358,9 @@ object TelephonyHook {
             return
         }
 
-        // Primary mechanism: per-Record location access gates inside TelephonyRegistry.
-        // Returning false for Records whose callerUid has KUROKO_POLICY_HIDE_CELL causes
-        // TelephonyRegistry itself to skip onCellInfoChanged / onCellLocationChanged AND
-        // strip CellIdentity from ServiceState & initial cached replay — strictly per-UID!
+        // 1. Per-Record location access gates: return false ONLY for HIDE_CELL && !SPOOF_CELL.
+        //    SPOOF_CELL passes through so TelephonyRegistry invokes the Record's callback where
+        //    our IPhoneStateListener proxy hook swaps in virtual cell/ServiceState data per-UID.
         var locationGateHooks = 0
         try {
             for (m in regClass.declaredMethods) {
@@ -187,7 +375,7 @@ object TelephonyHook {
                         try {
                             val record = param.args.firstOrNull() ?: return
                             val uid = extractRecordUid(record)
-                            if (uid > 0 && ShmReader.hasPolicy(uid, ShmReader.KUROKO_POLICY_HIDE_CELL)) {
+                            if (cellModeForUid(uid) == CellMode.HIDE) {
                                 param.result = false
                             }
                         } catch (t: Throwable) {
@@ -201,21 +389,55 @@ object TelephonyHook {
             logOnce("hook_reg_gates", "Failed hooking TelephonyRegistry location gates: $t")
         }
 
-        // Track notifyCellInfo* / notifyCellLocation* entry & attach fallback LocationAccessPolicy hook
-        // in case a future OEM build bypasses checkFineLocationAccess / checkCoarseLocationAccess.
+        // 2. Track listener registration so callback IBinder -> callerUid is known BEFORE initial replay
+        var listenHooks = 0
+        for (listenName in listOf("listenWithEventList", "listenForSubscriber", "listen")) {
+            try {
+                val hooks = XposedBridge.hookAllMethods(regClass, listenName, object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        try {
+                            val uid = Binder.getCallingUid()
+                            if (uid <= 0) return
+                            val args = param.args ?: return
+                            for (arg in args) {
+                                if (arg is IInterface) {
+                                    val binder = arg.asBinder()
+                                    if (binder != null) {
+                                        callbackBinderToUid[binder] = uid
+                                    }
+                                }
+                            }
+                        } catch (_: Throwable) {
+                        }
+                    }
+                })
+                listenHooks += hooks.size
+            } catch (_: Throwable) {
+            }
+        }
+
+        // 3. Sync mRecords -> callbackBinderToUid during notify broadcasts (for SPOOF_CELL)
+        //    and track inCellNotify fallback (for HIDE_CELL)
         val notifyMethods = listOf(
             "notifyCellInfoForSubscriber",
             "notifyCellInfo",
             "notifyCellLocationForSubscriber",
-            "notifyCellLocation"
+            "notifyCellLocation",
+            "notifyServiceStateForSubscriber"
         )
         var notifyHooks = 0
         for (name in notifyMethods) {
             try {
                 val hooks = XposedBridge.hookAllMethods(regClass, name, object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
-                        if (ShmReader.hasAnyTargetWithPolicy(ShmReader.KUROKO_POLICY_HIDE_CELL)) {
-                            inCellNotify.set(true)
+                        try {
+                            if (ShmReader.hasAnyTargetWithPolicy(ShmReader.KUROKO_POLICY_HIDE_CELL)) {
+                                inCellNotify.set(true)
+                            }
+                            if (ShmReader.hasAnyTargetWithPolicy(ShmReader.KUROKO_POLICY_SPOOF_CELL)) {
+                                syncRegistryRecords(param.thisObject)
+                            }
+                        } catch (_: Throwable) {
                         }
                     }
 
@@ -228,13 +450,105 @@ object TelephonyHook {
             }
         }
 
+        // 4. Hook IPhoneStateListener$Stub$Proxy per-Record callback delivery (SPOOF_CELL)
+        hookPhoneStateListenerProxy(cl)
+
         if (locationGateHooks == 0) {
             hookLocationAccessPolicyFallback(cl)
         }
 
         XposedBridge.log(
-            "$TAG: Hooked TelephonyRegistry (locationGates=$locationGateHooks, notifyHooks=$notifyHooks)"
+            "$TAG: Hooked TelephonyRegistry (locationGates=$locationGateHooks, listenHooks=$listenHooks, notifyHooks=$notifyHooks)"
         )
+    }
+
+    private fun syncRegistryRecords(registry: Any?) {
+        if (registry == null) return
+        try {
+            val records = getFieldValue(registry, "mRecords") as? Iterable<*> ?: return
+            synchronized(records) {
+                for (rec in records) {
+                    if (rec == null) continue
+                    val uid = extractRecordUid(rec)
+                    if (uid <= 0) continue
+                    val cb = getFieldValue(rec, "callback") as? IInterface ?: continue
+                    val binder = cb.asBinder() ?: continue
+                    callbackBinderToUid[binder] = uid
+                }
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun hookPhoneStateListenerProxy(cl: ClassLoader) {
+        val proxyCandidates = listOf(
+            "com.android.internal.telephony.IPhoneStateListener\$Stub\$Proxy",
+            "com.android.internal.telephony.ITelephonyCallback\$Stub\$Proxy"
+        )
+        for (clsName in proxyCandidates) {
+            val proxyCls = XposedHelpers.findClassIfExists(clsName, cl) ?: continue
+            try {
+                XposedBridge.hookAllMethods(proxyCls, "onCellInfoChanged", object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        try {
+                            val uid = lookupCallbackUid(param.thisObject)
+                            if (cellModeForUid(uid) != CellMode.SPOOF) return
+                            val pair = ShmReader.readCellsWithHeader() ?: return
+                            if (pair.second.isEmpty()) return
+                            param.args[0] = VirtualCellBuilder.buildCellInfoList(pair.first, pair.second)
+                        } catch (t: Throwable) {
+                            logOnce("proxy_cell_info", "onCellInfoChanged spoof error: $t")
+                        }
+                    }
+                })
+
+                XposedBridge.hookAllMethods(proxyCls, "onCellLocationChanged", object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        try {
+                            val uid = lookupCallbackUid(param.thisObject)
+                            if (cellModeForUid(uid) != CellMode.SPOOF) return
+                            val pair = ShmReader.readCellsWithHeader() ?: return
+                            if (pair.second.isEmpty()) return
+                            val paramType = (param.method as? Method)?.parameterTypes?.firstOrNull()
+                            val replacement: Any? = if (paramType != null && Bundle::class.java.isAssignableFrom(paramType)) {
+                                VirtualCellBuilder.buildGsmCellLocationBundle(pair.second)
+                            } else {
+                                VirtualCellBuilder.buildServingCellIdentity(pair.first, pair.second)
+                            }
+                            if (replacement != null) {
+                                param.args[0] = replacement
+                            }
+                        } catch (t: Throwable) {
+                            logOnce("proxy_cell_loc", "onCellLocationChanged spoof error: $t")
+                        }
+                    }
+                })
+
+                XposedBridge.hookAllMethods(proxyCls, "onServiceStateChanged", object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        try {
+                            val orig = param.args.firstOrNull() as? ServiceState ?: return
+                            val uid = lookupCallbackUid(param.thisObject)
+                            if (cellModeForUid(uid) != CellMode.SPOOF) return
+                            val pair = ShmReader.readCellsWithHeader() ?: return
+                            val serving = VirtualCellBuilder.buildServingCellIdentity(pair.first, pair.second)
+                            param.args[0] = VirtualCellBuilder.rewriteServiceState(orig, pair.first, serving)
+                        } catch (t: Throwable) {
+                            logOnce("proxy_ss", "onServiceStateChanged spoof error: $t")
+                        }
+                    }
+                })
+
+                XposedBridge.log("$TAG: Hooked $clsName (onCellInfoChanged/onCellLocationChanged/onServiceStateChanged)")
+            } catch (t: Throwable) {
+                logOnce("hook_proxy_$clsName", "Failed hooking $clsName: $t")
+            }
+        }
+    }
+
+    private fun lookupCallbackUid(proxyObj: Any?): Int {
+        val binder = (proxyObj as? IInterface)?.asBinder() ?: return -1
+        return callbackBinderToUid[binder] ?: -1
     }
 
     private fun hookLocationAccessPolicyFallback(cl: ClassLoader) {
@@ -257,7 +571,7 @@ object TelephonyHook {
                         if (inCellNotify.get() != true) return
                         val query = param.args.getOrNull(1) ?: return
                         val uid = (getFieldValue(query, "callingUid") as? Int) ?: return
-                        if (ShmReader.hasPolicy(uid, ShmReader.KUROKO_POLICY_HIDE_CELL)) {
+                        if (cellModeForUid(uid) == CellMode.HIDE) {
                             param.result = deniedSoft
                         }
                     } catch (_: Throwable) {
