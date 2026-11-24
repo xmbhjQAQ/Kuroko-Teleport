@@ -3,6 +3,7 @@ package com.kuroko.teleport.ipc
 import android.content.Context
 import android.os.Process
 import com.kuroko.teleport.R
+import com.kuroko.teleport.diag.AppLogBuffer
 import com.kuroko.teleport.ui.AppLocaleManager
 import com.kuroko.teleport.ui.CustomSpeedPreset
 import com.kuroko.teleport.ui.RouteStore
@@ -66,6 +67,15 @@ object KurokoRuntime {
 
     @Volatile
     private var overlayExpanded = false
+
+    @Volatile
+    private var lastLoggedConnected: Boolean? = null
+
+    @Volatile
+    private var lastLoggedCompatState: VersionCompatState? = null
+
+    @Volatile
+    private var lastLoggedHooksSignature: String? = null
 
     private val _snapshot = MutableStateFlow(DaemonSnapshot())
     val snapshot: StateFlow<DaemonSnapshot> = _snapshot.asStateFlow()
@@ -155,6 +165,7 @@ object KurokoRuntime {
         init(context)
         val canonical = AppLocaleManager.normalizeTag(tag)
         _appLanguageTag.value = canonical
+        AppLogBuffer.i("Locale", "Language switched to $canonical")
         AppLocaleManager.applyLanguage(context, canonical)
         refreshLocalizedMessages()
     }
@@ -343,18 +354,33 @@ object KurokoRuntime {
 
     suspend fun pauseSimulation(): Result<String> {
         val res = daemon.hold()
+        if (res.isSuccess) {
+            AppLogBuffer.i("Runtime", "Simulation paused (HOLD)")
+        } else {
+            AppLogBuffer.w("Runtime", "Pause failed: ${res.exceptionOrNull()?.message ?: "error"}")
+        }
         pollOnce()
         return res
     }
 
     suspend fun stopSimulation(): Result<String> {
         val res = daemon.stop()
+        if (res.isSuccess) {
+            AppLogBuffer.i("Runtime", "Simulation stopped (STOP)")
+        } else {
+            AppLogBuffer.w("Runtime", "Stop failed: ${res.exceptionOrNull()?.message ?: "error"}")
+        }
         pollOnce()
         return res
     }
 
     suspend fun resetSteps(): Result<String> {
         val res = daemon.resetSteps()
+        if (res.isSuccess) {
+            AppLogBuffer.i("Runtime", "Virtual step counter reset")
+        } else {
+            AppLogBuffer.w("Runtime", "Reset steps failed: ${res.exceptionOrNull()?.message ?: "error"}")
+        }
         pollOnce()
         return res
     }
@@ -372,6 +398,7 @@ object KurokoRuntime {
         val compat = evaluateVersionCompat(snap.connected, snap.status, locCtx)
         _versionCompat.value = compat
         if (snap.connected && !compat.canStartSimulation) {
+            AppLogBuffer.w("VersionLock", "Start blocked by version lock: state=${compat.state}")
             val msg = if (compat.actionHint.isNotBlank()) {
                 "${compat.headline}: ${compat.actionHint}"
             } else {
@@ -387,6 +414,11 @@ object KurokoRuntime {
             )
         if (st.active && !st.moving && !completed && st.routeLengthM > 1f) {
             val res = daemon.start()
+            if (res.isSuccess) {
+                AppLogBuffer.i("Runtime", "Resumed active route simulation")
+            } else {
+                AppLogBuffer.w("Runtime", "Resume failed: ${res.exceptionOrNull()?.message ?: "error"}")
+            }
             pollOnce()
             return res
         }
@@ -396,6 +428,7 @@ object KurokoRuntime {
         val cfg = store.loadSettings()
         val targets = store.loadTargets()
         if (draft.draftWaypoints.size < 2) {
+            AppLogBuffer.w("Runtime", "HUD start aborted: no draft route configured")
             return Result.failure(
                 IllegalStateException(locCtx.getString(R.string.daemon_err_no_draft_route))
             )
@@ -417,8 +450,16 @@ object KurokoRuntime {
             maxDistanceM = draft.draftTargetDistKm * 1000f,
             maxLaps = effMaxLaps
         )
-        if (rRes.isFailure) return rRes
+        if (rRes.isFailure) {
+            AppLogBuffer.w("Runtime", "Route push failed before start: ${rRes.exceptionOrNull()?.message ?: "error"}")
+            return rRes
+        }
         val sRes = daemon.start()
+        if (sRes.isSuccess) {
+            AppLogBuffer.i("Runtime", "Started draft route (${draft.draftWaypoints.size} pts, loop=${draft.draftLoop}, targets=${targets.size})")
+        } else {
+            AppLogBuffer.w("Runtime", "Start route failed: ${sRes.exceptionOrNull()?.message ?: "error"}")
+        }
         pollOnce()
         return sRes
     }
@@ -451,6 +492,9 @@ object KurokoRuntime {
                 val res = daemon.setTargets(merged)
                 if (res.isSuccess) {
                     selfTestTargetsActive = true
+                    AppLogBuffer.i("SelfTest", "Sensor self-test started (app UID temporarily subscribed)")
+                } else {
+                    AppLogBuffer.w("SelfTest", "Sensor self-test target inject failed: ${res.exceptionOrNull()?.message ?: "error"}")
                 }
                 pollOnce()
             }
@@ -472,6 +516,7 @@ object KurokoRuntime {
                 val compat = evaluateVersionCompat(connected, latest)
                 _versionCompat.value = compat
                 if (!compat.canStartSimulation) {
+                    AppLogBuffer.w("SelfTest", "Temporary jog pulse blocked by version lock (${compat.state})")
                     pollOnce()
                     return@withLock
                 }
@@ -489,6 +534,9 @@ object KurokoRuntime {
                 if (hRes.isSuccess) {
                     selfTestTempJogActive = true
                     _sensorSelfTestTempJogActive.value = true
+                    AppLogBuffer.i("SelfTest", "Temporary jog pulse activated")
+                } else {
+                    AppLogBuffer.w("SelfTest", "Temporary jog pulse failed: ${hRes.exceptionOrNull()?.message ?: "error"}")
                 }
                 pollOnce()
             }
@@ -506,6 +554,7 @@ object KurokoRuntime {
         _sensorSelfTestTempJogActive.value = false
         scope.launch {
             selfTestMutex.withLock {
+                val hadAny = selfTestTempJogActive || selfTestTargetsActive
                 if (selfTestTempJogActive) {
                     daemon.setMode(selfTestPrevMotionMode, selfTestPrevCarryMode)
                     if (!selfTestPrevActive) {
@@ -516,6 +565,9 @@ object KurokoRuntime {
                 if (selfTestTargetsActive) {
                     daemon.setTargets(selfTestSavedTargets)
                     selfTestTargetsActive = false
+                }
+                if (hadAny) {
+                    AppLogBuffer.i("SelfTest", "Sensor self-test ended and target list restored")
                 }
                 pollOnce()
             }
@@ -545,7 +597,33 @@ object KurokoRuntime {
                 connected = true,
                 message = connMsg
             )
-            _versionCompat.value = evaluateVersionCompat(true, st, locCtx)
+            val compat = evaluateVersionCompat(true, st, locCtx)
+            _versionCompat.value = compat
+
+            val hooksSig = "L=${st.locShm},P=${st.phoneShm},S=${st.sensorShm}"
+            if (lastLoggedConnected != true) {
+                lastLoggedConnected = true
+                lastLoggedHooksSignature = hooksSig
+                AppLogBuffer.i(
+                    "Runtime",
+                    "Daemon online: mod=v${st.modVer}(#${st.modCode}) xp=#${st.xposedCode} zy=#${st.zygiskCode} $hooksSig targets=${st.targetCount}"
+                )
+            } else if (lastLoggedHooksSignature != hooksSig) {
+                lastLoggedHooksSignature = hooksSig
+                AppLogBuffer.i("Runtime", "Hook state changed: $hooksSig")
+            }
+            if (lastLoggedCompatState != compat.state) {
+                lastLoggedCompatState = compat.state
+                if (compat.state == VersionCompatState.MATCHED) {
+                    AppLogBuffer.i("VersionLock", "All 4 tiers aligned (v${KurokoProtocol.APP_VERSION_NAME} #${KurokoProtocol.APP_VERSION_CODE})")
+                } else {
+                    AppLogBuffer.w(
+                        "VersionLock",
+                        "Version lock state=${compat.state} app=#${KurokoProtocol.APP_VERSION_CODE} mod=#${st.modCode} xp=#${st.xposedCode} zy=#${st.zygiskCode} P=${st.protoVer} SHM=${st.shmVer}"
+                    )
+                }
+            }
+
             if (!initialTargetsSynced && !selfTestTargetsActive) {
                 initialTargetsSynced = true
                 val ctx = appContext
@@ -563,7 +641,13 @@ object KurokoRuntime {
                 message = res.exceptionOrNull()?.message ?: fallbackMsg
             )
             _snapshot.value = nextSnap
-            _versionCompat.value = evaluateVersionCompat(false, nextSnap.status, locCtx)
+            val compat = evaluateVersionCompat(false, nextSnap.status, locCtx)
+            _versionCompat.value = compat
+            if (lastLoggedConnected != false) {
+                lastLoggedConnected = false
+                lastLoggedCompatState = compat.state
+                AppLogBuffer.w("Runtime", "Daemon offline: ${nextSnap.message}")
+            }
         }
     }
 }

@@ -48,6 +48,7 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.kuroko.teleport.R
+import com.kuroko.teleport.diag.AppLogBuffer
 import com.kuroko.teleport.geo.CoordTransform
 import com.kuroko.teleport.ipc.DaemonSnapshot
 import com.kuroko.teleport.ipc.KurokoProtocol
@@ -159,6 +160,7 @@ class FloatingOverlayService : Service() {
                         ACTION_PAUSE -> KurokoRuntime.pauseSimulation()
                         ACTION_RESUME -> {
                             KurokoRuntime.resumeOrStartRoute(applicationContext).onFailure { err ->
+                                AppLogBuffer.w("Overlay", "HUD resume blocked: ${err.message ?: "unknown"}")
                                 val toastCtx = uiContext()
                                 Toast.makeText(
                                     toastCtx,
@@ -176,6 +178,7 @@ class FloatingOverlayService : Service() {
                 return if (headless) START_NOT_STICKY else START_STICKY
             }
             ACTION_CLOSE_OVERLAY -> {
+                AppLogBuffer.i("Overlay", "Overlay closed by user action")
                 KurokoRuntime.updateOverlayPrefs(applicationContext, enabled = false)
                 stopSelf()
                 return START_NOT_STICKY
@@ -183,6 +186,7 @@ class FloatingOverlayService : Service() {
         }
 
         if (!Settings.canDrawOverlays(this)) {
+            AppLogBuffer.w("Overlay", "Overlay start aborted: SYSTEM_ALERT_WINDOW permission not granted")
             KurokoRuntime.updateOverlayPrefs(applicationContext, enabled = false)
             KurokoRuntime.setOverlayRunning(false)
             stopSelf()
@@ -202,6 +206,7 @@ class FloatingOverlayService : Service() {
     }
 
     override fun onDestroy() {
+        AppLogBuffer.i("Overlay", "Floating HUD service destroyed")
         mainHandler.removeCallbacks(idleDimRunnable)
         snapAnimator?.cancel()
         snapAnimator = null
@@ -413,7 +418,9 @@ class FloatingOverlayService : Service() {
         runCatching {
             windowManager.addView(container, params)
             hudAttached = true
-        }.onFailure {
+            AppLogBuffer.i("Overlay", "Floating HUD attached (secure=${KurokoRuntime.overlayPrefs.value.secureFlag})")
+        }.onFailure { err ->
+            AppLogBuffer.e("Overlay", "Failed to attach Floating HUD: ${err.javaClass.simpleName}: ${err.message}")
             KurokoRuntime.setOverlayRunning(false)
             stopSelf()
             return

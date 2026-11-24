@@ -79,6 +79,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.MyLocation
@@ -279,6 +280,7 @@ private fun KurokoControllerScreen() {
     var showPointsSheet by remember { mutableStateOf(false) }
     var showRoutesSheet by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var showDiagnosticsDialog by remember { mutableStateOf(false) }
     var showHelpSheet by remember { mutableStateOf(false) }
     var showTargetDistDialog by remember { mutableStateOf(false) }
     var showCustomLapsDialog by remember { mutableStateOf(false) }
@@ -1018,6 +1020,51 @@ private fun KurokoControllerScreen() {
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = pillAccent
+                            )
+                        }
+                    }
+
+                    // Offline Troubleshooting Compact Pill (one-tap access to Diagnostics & Logs)
+                    AnimatedVisibility(visible = !daemonConnected) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(NeuColors.Coral.copy(alpha = 0.11f))
+                                .border(1.dp, NeuColors.Coral.copy(alpha = 0.38f), RoundedCornerShape(10.dp))
+                                .clickable { showDiagnosticsDialog = true }
+                                .padding(horizontal = 9.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.HealthAndSafety,
+                                    contentDescription = null,
+                                    tint = NeuColors.CoralDeep,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = daemonMessage,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = NeuColors.CoralDeep,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(R.string.compat_btn_open_diag),
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = NeuColors.CoralDeep,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }
@@ -2682,7 +2729,23 @@ private fun KurokoControllerScreen() {
                 KurokoRuntime.updateSpeedPresets(context, defaults)
                 showToast(context.getString(R.string.main_toast_presets_restored))
             },
-            onOpenHelp = { showHelpSheet = true }
+            onOpenHelp = { showHelpSheet = true },
+            onOpenDiagnostics = { showDiagnosticsDialog = true }
+        )
+    }
+
+    if (showDiagnosticsDialog) {
+        DiagnosticsDialog(
+            daemonSnap = daemonSnap,
+            versionCompat = versionCompat,
+            motionState = runtimeMotion,
+            overlayPrefs = overlayPrefs,
+            savedTargets = targetApps,
+            appLangTag = appLanguageTag,
+            tiandituToken = settings.tiandituToken,
+            amapWebKey = settings.amapWebKey,
+            onDismiss = { showDiagnosticsDialog = false },
+            onNotify = { msg -> showToast(msg) }
         )
     }
 
@@ -2748,6 +2811,10 @@ private fun KurokoControllerScreen() {
             onOpenSettings = {
                 showVersionLockDialog = false
                 showSettingsDialog = true
+            },
+            onOpenDiagnostics = {
+                showVersionLockDialog = false
+                showDiagnosticsDialog = true
             }
         )
     }
@@ -3093,7 +3160,8 @@ private fun VersionLockDialog(
     simStatus: SimStatus,
     versionCompat: VersionCompatInfo,
     onDismiss: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onOpenDiagnostics: () -> Unit
 ) {
     val isReboot = versionCompat.state == VersionCompatState.REBOOT_REQUIRED
     val accent = if (isReboot) NeuColors.AmberDeep else NeuColors.Coral
@@ -3227,6 +3295,28 @@ private fun VersionLockDialog(
                     lineHeight = 14.sp,
                     color = NeuColors.InkSecondary
                 )
+
+                NeuButton(
+                    onClick = onOpenDiagnostics,
+                    modifier = Modifier.fillMaxWidth(),
+                    tone = NeuTone.NEUTRAL,
+                    cornerRadius = 10.dp,
+                    contentPadding = PaddingValues(vertical = 8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.HealthAndSafety,
+                        contentDescription = null,
+                        tint = NeuColors.CobaltDeep,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.compat_btn_open_diag),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = NeuColors.CobaltDeep
+                    )
+                }
             }
         },
         confirmButton = {

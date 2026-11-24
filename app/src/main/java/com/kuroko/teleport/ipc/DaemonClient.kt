@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.annotation.StringRes
 import com.kuroko.teleport.BuildConfig
 import com.kuroko.teleport.R
+import com.kuroko.teleport.diag.AppLogBuffer
 import com.kuroko.teleport.ui.AppLocaleManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -346,6 +347,29 @@ class DaemonClient {
     private var reader: BufferedReader? = null
     private var writer: BufferedWriter? = null
 
+    @Volatile
+    private var lastErrSignature: String? = null
+
+    @Volatile
+    private var lastErrLogMs: Long = 0L
+
+    private fun logFailureThrottled(signature: String, detail: String, error: Boolean = true) {
+        val now = System.currentTimeMillis()
+        if (lastErrSignature == signature && now - lastErrLogMs < 30_000L) return
+        lastErrSignature = signature
+        lastErrLogMs = now
+        if (error) {
+            AppLogBuffer.e("DaemonClient", detail)
+        } else {
+            AppLogBuffer.w("DaemonClient", detail)
+        }
+    }
+
+    private fun clearFailureThrottle() {
+        lastErrSignature = null
+        lastErrLogMs = 0L
+    }
+
     private fun errMsg(@StringRes resId: Int, fallback: String, vararg args: Any): String {
         val ctx = contextProvider?.invoke()
         return ctx?.let {
@@ -486,7 +510,9 @@ class DaemonClient {
      */
     suspend fun resetConnection() = withContext(Dispatchers.IO) {
         mutex.withLock {
+            AppLogBuffer.i("DaemonClient", "Manual reconnect requested; clearing socket and token cache")
             cachedToken = null
+            clearFailureThrottle()
             closeSocketLocked()
         }
     }
@@ -511,6 +537,7 @@ class DaemonClient {
                     val response = r.readLine()
                         ?: throw IOException(errMsg(R.string.daemon_err_disconnected, "Daemon disconnected"))
                     if (response.startsWith("ERR UNAUTHORIZED")) {
+                        AppLogBuffer.w("DaemonClient", "Session unauthorized; refreshing token and reconnecting")
                         cachedToken = null
                         closeSocketLocked()
                         lastError = IOException(
@@ -519,8 +546,11 @@ class DaemonClient {
                         continue
                     }
                     if (response.startsWith("ERR ")) {
+                        val verb = command.substringBefore(' ')
+                        AppLogBuffer.w("DaemonClient", "Command $verb rejected: $response")
                         return@withLock Result.failure(IllegalStateException(response))
                     }
+                    clearFailureThrottle()
                     return@withLock Result.success(response)
                 } catch (e: Exception) {
                     lastError = e
@@ -530,6 +560,9 @@ class DaemonClient {
                     }
                 }
             }
+            val verb = command.substringBefore(' ')
+            val errSummary = lastError?.let { "${it.javaClass.simpleName}: ${it.message ?: "error"}" } ?: "comm failed"
+            logFailureThrottled("$verb:$errSummary", "IPC $verb failed: $errSummary")
             Result.failure(
                 lastError ?: IOException(errMsg(R.string.daemon_err_comm_failed, "Daemon communication failed"))
             )
@@ -567,6 +600,7 @@ class DaemonClient {
                 ?: throw IOException(errMsg(R.string.daemon_err_auth_no_resp, "No auth response from daemon"))
             if (!authResp.startsWith("OK AUTH")) {
                 cachedToken = null
+                AppLogBuffer.e("DaemonClient", "Daemon auth rejected: $authResp")
                 throw IOException(
                     errMsg(R.string.daemon_err_auth_failed, "Daemon auth failed: $authResp", authResp)
                 )
@@ -575,6 +609,8 @@ class DaemonClient {
             socket = sock
             reader = br
             writer = bw
+            clearFailureThrottle()
+            AppLogBuffer.i("DaemonClient", "Authenticated TCP loopback session on 127.0.0.1:${KurokoProtocol.CTRL_PORT}")
         } catch (e: Exception) {
             runCatching { sock.close() }
             throw e
@@ -588,6 +624,7 @@ class DaemonClient {
                 .start()
         } catch (e: Exception) {
             val detail = e.message ?: "error"
+            logFailureThrottled("su_spawn:$detail", "su spawn failed while fetching daemon token: $detail")
             throw IOException(
                 errMsg(R.string.daemon_err_su_failed, "Unable to run su for daemon token: $detail", detail),
                 e
@@ -597,11 +634,16 @@ class DaemonClient {
         val finished = process.waitFor(4, TimeUnit.SECONDS)
         if (!finished) {
             process.destroyForcibly()
+            logFailureThrottled("su_timeout", "Root token read timed out after 4s")
             throw IOException(errMsg(R.string.daemon_err_root_timeout, "Root token read timed out"))
         }
         val output = process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }.trim()
         val exitCode = process.exitValue()
         if (exitCode != 0 || output.isEmpty()) {
+            logFailureThrottled(
+                "token_exit_$exitCode",
+                "Failed to read daemon token file (exitCode=$exitCode)"
+            )
             throw IOException(
                 errMsg(
                     R.string.daemon_err_token_read,
@@ -617,6 +659,7 @@ class DaemonClient {
             .firstOrNull { it.length >= 16 && it.all { ch -> ch.isLetterOrDigit() } }
             ?: output.lineSequence().last().trim()
         if (tokenLine.isEmpty()) {
+            logFailureThrottled("token_empty", "Daemon token file is empty")
             throw IOException(
                 errMsg(
                     R.string.daemon_err_token_empty,

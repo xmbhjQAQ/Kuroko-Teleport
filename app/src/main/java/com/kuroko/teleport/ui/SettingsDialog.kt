@@ -28,6 +28,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
+import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
@@ -108,7 +109,8 @@ fun SettingsDialog(
     onReconnectDaemon: () -> Unit,
     onResetSteps: () -> Unit,
     onResetSpeedPresets: () -> Unit,
-    onOpenHelp: () -> Unit
+    onOpenHelp: () -> Unit,
+    onOpenDiagnostics: () -> Unit
 ) {
     val context = LocalContext.current
     val sensorManager = remember(context) {
@@ -762,6 +764,53 @@ fun SettingsDialog(
                                     SelfTestMetricRow(stringResource(R.string.selftest_metric_native_diag), diagText)
                                 }
                             }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = NeuColors.InsetDark.copy(alpha = 0.45f))
+
+                Text(
+                    text = stringResource(R.string.settings_diag_section),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = NeuColors.InkPrimary
+                )
+
+                NeuCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 14.dp, elevation = 3.dp) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 11.dp, vertical = 9.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.settings_diag_hint),
+                            fontSize = 10.5.sp,
+                            lineHeight = 14.sp,
+                            color = NeuColors.InkSecondary
+                        )
+                        NeuButton(
+                            onClick = {
+                                onDismiss()
+                                onOpenDiagnostics()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            tone = NeuTone.COBALT,
+                            cornerRadius = 11.dp,
+                            contentPadding = PaddingValues(vertical = 9.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.HealthAndSafety,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(R.string.settings_diag_btn),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }

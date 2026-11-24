@@ -214,4 +214,60 @@
     <string name="notif_action_close_hud">关悬浮窗</string>
     <string name="notif_action_view_lock">查看锁定</string>
     <string name="notif_action_open_app">打开主界面</string>
+
+    <!-- Diagnostics & Logs -->
+    <string name="settings_diag_section">诊断与日志</string>
+    <string name="settings_diag_btn">打开诊断与日志中心</string>
+    <string name="settings_diag_hint">一键体检定位异常、查看引擎/LSPosed/传感器日志，或导出脱敏诊断包用于排障反馈。</string>
+    <string name="compat_btn_open_diag">查看诊断日志</string>
+    <string name="diag_title">诊断与日志</string>
+    <string name="diag_collecting">正在采集诊断快照…</string>
+    <string name="diag_root_unavailable">未获取 Root（仅采集 App 侧日志）</string>
+    <string name="diag_collected_at_fmt">更新于 %1$s · %2$s</string>
+    <string name="diag_root_ok">Root 正常</string>
+    <string name="diag_root_no">无 Root</string>
+    <string name="diag_health_title">自动体检结论</string>
+    <string name="diag_status_pass">正常</string>
+    <string name="diag_status_warn">注意</string>
+    <string name="diag_status_fail">异常</string>
+    <string name="diag_check_daemon_title">Root 与守护进程</string>
+    <string name="diag_check_daemon_ok">kuroko_daemon 运行正常且已完成令牌鉴权</string>
+    <string name="diag_check_daemon_bootguard">防砖熔断已触发（boot_guard=%1$d）。排查日志后重置 /data/adb/kuroko/boot_guard 为 0 并重启。</string>
+    <string name="diag_check_daemon_disabled">模块在 KernelSU 管理器中处于禁用状态，请启用后重启。</string>
+    <string name="diag_check_daemon_no_root">未授予 Root 权限或 su 执行失败，请在 KernelSU 授予超级用户权限。</string>
+    <string name="diag_check_daemon_offline">守护进程离线（%1$s），请检查 KernelSU 模块状态并重启。</string>
+    <string name="diag_check_version_title">四端版本一致性</string>
+    <string name="diag_check_version_ok">四端版本一致：v%1$s (%2$d) · P%3$d · SHM%4$d</string>
+    <string name="diag_check_version_reboot">需重启手机以使系统侧钩子重新加载新版本模块。</string>
+    <string name="diag_check_version_mismatch">四端版本不匹配：App(%1$d) / Hook(%2$d) / Daemon(%3$d) / Sensor(%4$d)，请刷入同版一体包并重启。</string>
+    <string name="diag_check_xposed_title">LSPosed 系统钩子 (L / P)</string>
+    <string name="diag_check_xposed_ok">系统框架定位 (L✓) 与电话服务 (P✓) 钩子均已激活</string>
+    <string name="diag_check_xposed_missing">钩子未就绪（%1$s）。请在 LSPosed 启用 Kuroko Teleport 并仅勾选「系统框架 (android)」与「电话服务 (com.android.phone)」后重启。</string>
+    <string name="diag_check_sensor_title">Zygisk 传感器钩子 (S)</string>
+    <string name="diag_check_sensor_ok">单命名空间传感器钩子正常（%1$s）</string>
+    <string name="diag_check_sensor_dual_map">检测到多份 libsensorservice.so 映射（mp=%1$d），请导出诊断包反馈。</string>
+    <string name="diag_check_sensor_abi">当前 Android %1$s (API %2$d) 传感器符号未完整匹配，可能是该系统版本尚未完成 ABI 适配，请导出诊断包提交 Issue。</string>
+    <string name="diag_check_sensor_inactive">传感器钩子未激活，请确认已启用 Zygisk Next 并重启设备。</string>
+    <string name="diag_check_selinux_title">SELinux 策略检查</string>
+    <string name="diag_check_selinux_ok">未检测到与引擎相关的 SELinux AVC 拦截</string>
+    <string name="diag_check_selinux_avc">在系统日志中检测到 %1$d 条 SELinux AVC 拦截，请导出诊断包排查。</string>
+    <string name="diag_tab_summary">体检摘要</string>
+    <string name="diag_tab_daemon">守护进程</string>
+    <string name="diag_tab_lsposed">LSPosed</string>
+    <string name="diag_tab_system">传感器/系统</string>
+    <string name="diag_tab_app">App 事件</string>
+    <string name="diag_filter_errors_only">仅看警告/错误</string>
+    <string name="diag_redact_packages">匿名化目标 App 包名</string>
+    <string name="diag_privacy_note">鉴权令牌、地图 Key、路线坐标及无关应用日志已强制自动脱敏，绝不导出。</string>
+    <string name="diag_empty_log">（当前分类暂无日志记录）</string>
+    <string name="diag_btn_copy">复制摘要</string>
+    <string name="diag_btn_share">分享诊断包</string>
+    <string name="diag_btn_save">保存文件</string>
+    <string name="diag_btn_refresh">刷新</string>
+    <string name="diag_btn_close">关闭</string>
+    <string name="diag_copied_ok">已复制脱敏诊断摘要到剪贴板</string>
+    <string name="diag_saved_ok_fmt">诊断包已保存（%1$s）</string>
+    <string name="diag_share_chooser">分享 Kuroko Teleport 诊断包</string>
+    <string name="diag_export_failed_fmt">导出失败：%1$s</string>
+    <string name="diag_clipboard_label">Kuroko Teleport 诊断摘要</string>
 </resources>

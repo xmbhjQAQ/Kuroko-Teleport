@@ -214,4 +214,60 @@
     <string name="notif_action_close_hud">Close HUD</string>
     <string name="notif_action_view_lock">View Lock</string>
     <string name="notif_action_open_app">Open App</string>
+
+    <!-- Diagnostics & Logs -->
+    <string name="settings_diag_section">Diagnostics &amp; Logs</string>
+    <string name="settings_diag_btn">Open Diagnostics &amp; Logs</string>
+    <string name="settings_diag_hint">Run auto health checks, inspect engine/LSPosed/sensor logs, or export a redacted ZIP for troubleshooting.</string>
+    <string name="compat_btn_open_diag">View Logs</string>
+    <string name="diag_title">Diagnostics &amp; Logs</string>
+    <string name="diag_collecting">Collecting diagnostic snapshot…</string>
+    <string name="diag_root_unavailable">Root unavailable (showing App-side logs only)</string>
+    <string name="diag_collected_at_fmt">Updated %1$s · %2$s</string>
+    <string name="diag_root_ok">Root OK</string>
+    <string name="diag_root_no">No Root</string>
+    <string name="diag_health_title">Auto Health Check</string>
+    <string name="diag_status_pass">OK</string>
+    <string name="diag_status_warn">WARN</string>
+    <string name="diag_status_fail">ERR</string>
+    <string name="diag_check_daemon_title">Root &amp; Daemon</string>
+    <string name="diag_check_daemon_ok">kuroko_daemon is running and authenticated</string>
+    <string name="diag_check_daemon_bootguard">Boot-guard tripped (count=%1$d). Inspect logs, reset /data/adb/kuroko/boot_guard to 0, then reboot.</string>
+    <string name="diag_check_daemon_disabled">Module is disabled in KernelSU Manager. Enable Kuroko Teleport and reboot.</string>
+    <string name="diag_check_daemon_no_root">Root unavailable or su failed. Grant superuser access to Kuroko Teleport.</string>
+    <string name="diag_check_daemon_offline">Daemon offline (%1$s). Verify module install in KernelSU and reboot.</string>
+    <string name="diag_check_version_title">4-Tier Version Lock</string>
+    <string name="diag_check_version_ok">All 4 tiers aligned: v%1$s (%2$d) · P%3$d · SHM%4$d</string>
+    <string name="diag_check_version_reboot">Reboot required so system hooks reload the updated module.</string>
+    <string name="diag_check_version_mismatch">Version mismatch: App(%1$d) / Hook(%2$d) / Daemon(%3$d) / Sensor(%4$d). Flash matching All-in-One ZIP and reboot.</string>
+    <string name="diag_check_xposed_title">LSPosed Hooks (L / P)</string>
+    <string name="diag_check_xposed_ok">Location (L✓) and Phone (P✓) system hooks active</string>
+    <string name="diag_check_xposed_missing">Missing hook (%1$s). Enable Kuroko Teleport in LSPosed with ONLY System Framework (android) &amp; Phone Services (com.android.phone), then reboot.</string>
+    <string name="diag_check_sensor_title">Zygisk Sensor Hook (S)</string>
+    <string name="diag_check_sensor_ok">Single-namespace sensor hook active (%1$s)</string>
+    <string name="diag_check_sensor_dual_map">Multiple libsensorservice.so mappings detected (mp=%1$d). Export diagnostic ZIP for investigation.</string>
+    <string name="diag_check_sensor_abi">Sensor symbols incomplete on Android %1$s (API %2$d). This Android version\'s ABI may need adaptation — export the ZIP and open a GitHub issue.</string>
+    <string name="diag_check_sensor_inactive">Sensor hook inactive. Ensure Zygisk Next is enabled and reboot.</string>
+    <string name="diag_check_selinux_title">SELinux Policy</string>
+    <string name="diag_check_selinux_ok">No Kuroko-related SELinux AVC denials found</string>
+    <string name="diag_check_selinux_avc">Detected %1$d SELinux AVC denial(s) in logcat. Export diagnostic ZIP for analysis.</string>
+    <string name="diag_tab_summary">Summary</string>
+    <string name="diag_tab_daemon">Daemon</string>
+    <string name="diag_tab_lsposed">LSPosed</string>
+    <string name="diag_tab_system">Sensor/Sys</string>
+    <string name="diag_tab_app">App Events</string>
+    <string name="diag_filter_errors_only">Warn/Err only</string>
+    <string name="diag_redact_packages">Anonymize target app package names</string>
+    <string name="diag_privacy_note">Auth tokens, API keys, routes, coordinates, and unrelated app logs are always stripped automatically.</string>
+    <string name="diag_empty_log">(No log entries captured for this tab)</string>
+    <string name="diag_btn_copy">Copy Summary</string>
+    <string name="diag_btn_share">Share ZIP</string>
+    <string name="diag_btn_save">Save ZIP</string>
+    <string name="diag_btn_refresh">Refresh</string>
+    <string name="diag_btn_close">Close</string>
+    <string name="diag_copied_ok">Redacted summary copied to clipboard</string>
+    <string name="diag_saved_ok_fmt">Diagnostic ZIP saved (%1$s)</string>
+    <string name="diag_share_chooser">Share Kuroko Teleport Diagnostics</string>
+    <string name="diag_export_failed_fmt">Export failed: %1$s</string>
+    <string name="diag_clipboard_label">Kuroko Teleport Diagnostics</string>
 </resources>
