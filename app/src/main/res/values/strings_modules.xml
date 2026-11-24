@@ -270,4 +270,28 @@
     <string name="diag_share_chooser">Share Kuroko Teleport Diagnostics</string>
     <string name="diag_export_failed_fmt">Export failed: %1$s</string>
     <string name="diag_clipboard_label">Kuroko Teleport Diagnostics</string>
+
+    <!-- Release Update Checker -->
+    <string name="settings_update_section">Software Updates</string>
+    <string name="settings_update_channel_fmt">Version v%1$s · Channel: %2$s</string>
+    <string name="settings_update_channel_release">Release</string>
+    <string name="settings_update_channel_ci">CI Build</string>
+    <string name="settings_update_channel_local">Local Dev</string>
+    <string name="settings_update_auto_title">Auto-Check on Startup</string>
+    <string name="settings_update_auto_sub">Silently check GitHub Releases once every 24h on app launch</string>
+    <string name="settings_update_btn_check">Check for Updates</string>
+    <string name="settings_update_btn_checking">Checking Releases…</string>
+    <string name="settings_update_disabled_hint">Update checks are disabled in CI / local dev builds. Only official GitHub Release builds check for updates.</string>
+    <string name="update_status_up_to_date_fmt">Already up to date (v%1$s)</string>
+    <string name="update_status_found_fmt">New release available: %1$s</string>
+    <string name="update_status_failed_fmt">Update check failed: %1$s</string>
+    <string name="update_toast_open_failed">Unable to open browser for update link</string>
+    <string name="update_toast_skipped_fmt">Skipped reminder for %1$s (you can still check manually in Settings)</string>
+    <string name="update_dialog_title">Update Available</string>
+    <string name="update_version_diff_fmt">%1$s  →  %2$s</string>
+    <string name="update_published_fmt">Released %1$s</string>
+    <string name="update_ksu_flash_tip">Download the matching All-in-One KSU module ZIP from GitHub Releases, flash it in KernelSU Manager, and reboot so App, Hook, Daemon, and Sensor stay aligned.</string>
+    <string name="update_btn_download_zip_fmt">Direct Download Module ZIP%1$s</string>
+    <string name="update_btn_go">Update</string>
+    <string name="update_btn_skip_version">Skip this version</string>
 </resources>

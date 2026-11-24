@@ -25,6 +25,8 @@ STAGING_DIR = os.path.join(ROOT, "build", "module_staging")
 DIST_DIR = os.path.join(ROOT, "dist")
 ZIP_PATH = os.path.join(DIST_DIR, "kuroko-teleport-ksu-module.zip")
 DEFAULT_APK_PATH = os.path.join(ROOT, "app", "build", "outputs", "apk", "debug", "app-debug.apk")
+DEFAULT_GITHUB_REPO = "xmbhjQAQ/Kuroko-Teleport"
+VALID_CHANNELS = ("release", "ci", "local")
 
 PT_LOAD = 1
 PT_GNU_PROPERTY = 0x6474E553
@@ -492,7 +494,32 @@ def write_zip_entry(zf: zipfile.ZipFile, arcname: str, data: bytes, mode: int, c
     zf.writestr(info, data, compress_type=compress_type)
 
 
-def verify_zip_archive(zip_path: str, expected_modes: dict, text_entries: set, apk_meta=None):
+def resolve_build_channel(cli_channel=None) -> str:
+    raw = cli_channel if cli_channel is not None else os.environ.get("KUROKO_BUILD_CHANNEL", "local")
+    channel = raw.strip().lower() or "local"
+    if channel not in VALID_CHANNELS:
+        raise RuntimeError(f"Unsupported build channel {channel!r}; expected one of {VALID_CHANNELS}")
+    return channel
+
+
+def ksu_update_json_url() -> str:
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip() or DEFAULT_GITHUB_REPO
+    return f"https://github.com/{repo}/releases/latest/download/update.json"
+
+
+def render_module_prop_for_channel(raw: bytes, channel: str) -> bytes:
+    """Return strict-LF module.prop bytes; inject updateJson ONLY for release builds."""
+    lines = [
+        line
+        for line in raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n").splitlines()
+        if not line.startswith("updateJson=")
+    ]
+    if channel == "release":
+        lines.append(f"updateJson={ksu_update_json_url()}")
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def verify_zip_archive(zip_path: str, expected_modes: dict, text_entries: set, apk_meta=None, expect_update_json: bool = False):
     with zipfile.ZipFile(zip_path, "r") as zf:
         infos = {info.filename: info for info in zf.infolist()}
         missing = [k for k in expected_modes if k not in infos]
@@ -515,6 +542,20 @@ def verify_zip_archive(zip_path: str, expected_modes: dict, text_entries: set, a
                 if not raw.endswith(b"\n"):
                     raise RuntimeError(f"ZIP entry {name}: missing trailing LF")
 
+        mod_prop_lines = zf.read("module.prop").decode("utf-8").splitlines()
+        update_json_lines = [l for l in mod_prop_lines if l.startswith("updateJson=")]
+        if expect_update_json:
+            expected_line = f"updateJson={ksu_update_json_url()}"
+            if update_json_lines != [expected_line]:
+                raise RuntimeError(
+                    f"ZIP entry module.prop: expected {expected_line!r} for release channel, got {update_json_lines!r}"
+                )
+        else:
+            if update_json_lines:
+                raise RuntimeError(
+                    f"ZIP entry module.prop: unexpected updateJson in non-release channel: {update_json_lines!r}"
+                )
+
         if apk_meta is not None:
             apk_info = infos["apk/kuroko.apk"]
             if apk_info.compress_type != zipfile.ZIP_STORED:
@@ -536,7 +577,14 @@ def main():
     parser = argparse.ArgumentParser(description="Build Kuroko Teleport KSU2/Zygisk All-in-One module ZIP.")
     parser.add_argument("--no-apk", action="store_true", help="Skip embedding Controller APK (native-only test build)")
     parser.add_argument("--apk", default=DEFAULT_APK_PATH, help="Path to Controller APK to bundle")
+    parser.add_argument(
+        "--channel",
+        choices=VALID_CHANNELS,
+        default=None,
+        help="Build channel (release enables KSU updateJson; ci/local disable it). Defaults to KUROKO_BUILD_CHANNEL or 'local'.",
+    )
     args = parser.parse_args()
+    channel = resolve_build_channel(args.channel)
 
     local_props = load_local_properties(ROOT)
     sdk_dir = find_android_sdk(local_props)
@@ -618,6 +666,8 @@ def main():
                 raw = f.read()
             if b"\r" in raw:
                 raise RuntimeError(f"Template file {src} contains CRLF (\\r); must be strict LF")
+            if fname == "module.prop":
+                raw = render_module_prop_for_channel(raw, channel)
             dst = os.path.join(STAGING_DIR, *fname.split("/"))
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             with open(dst, "wb") as f:
@@ -652,13 +702,20 @@ def main():
             text_entries.add("apk/apk_meta.prop")
 
     print("\n=== [6/6] Auditing final ZIP archive ===")
-    verify_zip_archive(ZIP_PATH, expected_modes, text_entries=text_entries, apk_meta=apk_meta)
+    verify_zip_archive(
+        ZIP_PATH,
+        expected_modes,
+        text_entries=text_entries,
+        apk_meta=apk_meta,
+        expect_update_json=(channel == "release"),
+    )
 
     with open(ZIP_PATH, "rb") as f:
         sha256 = hashlib.sha256(f.read()).hexdigest()
     mode_label = "All-in-One (with bundled APK)" if apk_meta is not None else "Native-only (--no-apk)"
     print(f"  Kuroko Teleport ZIP audit PASS ({mode_label}): {ZIP_PATH}")
     print(f"  Version: v{props['RELEASE_VERSION_NAME']} (versionCode={props['RELEASE_VERSION_CODE']})")
+    print(f"  Channel: {channel} (KSU updateJson={'enabled' if channel == 'release' else 'disabled'})")
     print(f"  Size:    {os.path.getsize(ZIP_PATH):,} bytes")
     print(f"  SHA256:  {sha256}")
 

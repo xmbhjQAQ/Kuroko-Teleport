@@ -23,6 +23,18 @@ val ipcProtocolVersion = reqVersionProp("IPC_PROTOCOL_VERSION").toInt()
 val shmSchemaVersion = reqVersionProp("SHM_SCHEMA_VERSION").toInt()
 val minCompatModuleCode = reqVersionProp("MIN_COMPAT_MODULE_CODE").toInt()
 
+val buildChannel = (
+    project.findProperty("kurokoBuildChannel")?.toString()
+        ?: System.getenv("KUROKO_BUILD_CHANNEL")
+        ?: "local"
+).trim().lowercase()
+require(buildChannel in setOf("release", "ci", "local")) {
+    "Unsupported KUROKO_BUILD_CHANNEL='$buildChannel' (expected one of: release, ci, local)"
+}
+val updateCheckEnabled = (buildChannel == "release")
+val githubRepo = System.getenv("GITHUB_REPOSITORY")?.trim()?.takeIf { it.isNotEmpty() }
+    ?: "xmbhjQAQ/Kuroko-Teleport"
+
 val signingKeystorePath = System.getenv("SIGNING_KEYSTORE_PATH")?.trim().orEmpty()
 val signingStorePassword = System.getenv("SIGNING_STORE_PASSWORD").orEmpty()
 val signingKeyAlias = System.getenv("SIGNING_KEY_ALIAS")?.trim().orEmpty()
@@ -47,6 +59,9 @@ android {
         buildConfigField("int", "IPC_PROTOCOL_VERSION", ipcProtocolVersion.toString())
         buildConfigField("int", "SHM_SCHEMA_VERSION", shmSchemaVersion.toString())
         buildConfigField("int", "MIN_COMPAT_MODULE_CODE", minCompatModuleCode.toString())
+        buildConfigField("String", "BUILD_CHANNEL", "\"$buildChannel\"")
+        buildConfigField("boolean", "UPDATE_CHECK_ENABLED", updateCheckEnabled.toString())
+        buildConfigField("String", "GITHUB_REPO", "\"$githubRepo\"")
 
         ndk {
             abiFilters += listOf("arm64-v8a")

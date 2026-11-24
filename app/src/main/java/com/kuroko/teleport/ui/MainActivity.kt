@@ -153,6 +153,9 @@ import com.kuroko.teleport.geo.SearchPlace
 import com.kuroko.teleport.ipc.DaemonTargetSpec
 import com.kuroko.teleport.ipc.DaemonWaypoint
 import com.kuroko.teleport.ipc.SimStatus
+import com.kuroko.teleport.update.ReleaseUpdateInfo
+import com.kuroko.teleport.update.UpdateCheckOutcome
+import com.kuroko.teleport.update.UpdateChecker
 import com.kuroko.teleport.ipc.VersionCompatInfo
 import com.kuroko.teleport.ipc.VersionCompatState
 import com.kuroko.teleport.ipc.KurokoProtocol
@@ -288,6 +291,25 @@ private fun KurokoControllerScreen() {
     var showVersionLockDialog by remember { mutableStateOf(false) }
     var pendingOverlayAfterPermission by remember { mutableStateOf(false) }
 
+    // Release-only update check state (compile-time disabled for CI / local builds)
+    var autoCheckUpdate by remember { mutableStateOf(UpdateChecker.isAutoCheckEnabled(context)) }
+    var updateCheckBusy by remember { mutableStateOf(false) }
+    var updateStatusText by remember { mutableStateOf<String?>(null) }
+    var pendingUpdateInfo by remember { mutableStateOf<ReleaseUpdateInfo?>(null) }
+
+    LaunchedEffect(Unit) {
+        if (!UpdateChecker.shouldAutoCheckNow(context)) return@LaunchedEffect
+        delay(1500L)
+        when (val outcome = UpdateChecker.checkForUpdate(context, manual = false)) {
+            is UpdateCheckOutcome.UpdateAvailable -> {
+                if (!outcome.isIgnored) {
+                    pendingUpdateInfo = outcome.info
+                }
+            }
+            else -> Unit
+        }
+    }
+
     fun buildCurrentSettingsSnapshot(): AppSettings = settings.copy(
         lastLatWgs84 = centerWgs84.lat,
         lastLonWgs84 = centerWgs84.lon,
@@ -368,6 +390,18 @@ private fun KurokoControllerScreen() {
         scope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
             snackbarHostState.showSnackbar(msg)
+        }
+    }
+
+    fun openExternalUrl(url: String) {
+        val ok = runCatching {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        }.isSuccess
+        if (!ok) {
+            showToast(context.getString(R.string.update_toast_open_failed))
         }
     }
 
@@ -2730,7 +2764,69 @@ private fun KurokoControllerScreen() {
                 showToast(context.getString(R.string.main_toast_presets_restored))
             },
             onOpenHelp = { showHelpSheet = true },
-            onOpenDiagnostics = { showDiagnosticsDialog = true }
+            onOpenDiagnostics = { showDiagnosticsDialog = true },
+            autoCheckUpdate = autoCheckUpdate,
+            updateCheckBusy = updateCheckBusy,
+            updateStatusText = updateStatusText,
+            onToggleAutoCheckUpdate = { enabled ->
+                autoCheckUpdate = enabled
+                UpdateChecker.setAutoCheckEnabled(context, enabled)
+            },
+            onManualCheckUpdate = {
+                if (!updateCheckBusy) {
+                    updateCheckBusy = true
+                    updateStatusText = null
+                    scope.launch {
+                        try {
+                            when (val outcome = UpdateChecker.checkForUpdate(context, manual = true)) {
+                                is UpdateCheckOutcome.UpdateAvailable -> {
+                                    updateStatusText = context.getString(
+                                        R.string.update_status_found_fmt,
+                                        outcome.info.tagName
+                                    )
+                                    showSettingsDialog = false
+                                    pendingUpdateInfo = outcome.info
+                                }
+                                is UpdateCheckOutcome.UpToDate -> {
+                                    val msg = context.getString(
+                                        R.string.update_status_up_to_date_fmt,
+                                        outcome.currentVersion
+                                    )
+                                    updateStatusText = msg
+                                    showToast(msg)
+                                }
+                                is UpdateCheckOutcome.Failed -> {
+                                    val msg = context.getString(
+                                        R.string.update_status_failed_fmt,
+                                        outcome.message
+                                    )
+                                    updateStatusText = msg
+                                    showToast(msg)
+                                }
+                                is UpdateCheckOutcome.Disabled -> Unit
+                            }
+                        } finally {
+                            updateCheckBusy = false
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    pendingUpdateInfo?.let { updateInfo ->
+        UpdateDialog(
+            info = updateInfo,
+            onUpdateNow = { targetUrl ->
+                pendingUpdateInfo = null
+                openExternalUrl(targetUrl)
+            },
+            onSkipVersion = { tag ->
+                UpdateChecker.setIgnoredTag(context, tag)
+                pendingUpdateInfo = null
+                showToast(context.getString(R.string.update_toast_skipped_fmt, tag))
+            },
+            onDismiss = { pendingUpdateInfo = null }
         )
     }
 

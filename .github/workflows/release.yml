@@ -143,10 +143,11 @@ jobs:
       - name: Audit version contract, Android XML i18n & shell lang packs
         run: python3 scripts/audit_i18n.py
 
-      - name: Build APK & All-in-One KSU2/Zygisk module (Option-A Signing)
+      - name: Build APK & All-in-One KSU2/Zygisk module (Option-A Signing, Release channel)
         id: build
         shell: bash
         env:
+          KUROKO_BUILD_CHANNEL: release
           SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
@@ -172,7 +173,7 @@ jobs:
             SIGNING_MODE="debug"
           fi
 
-          python3 build_module.py --apk "$APK_PATH"
+          python3 build_module.py --apk "$APK_PATH" --channel release
 
           {
             echo "apk_path=$APK_PATH"
@@ -183,13 +184,15 @@ jobs:
         if: always()
         run: rm -f "$RUNNER_TEMP/release.jks"
 
-      - name: Stage release assets & compose bilingual release notes
+      - name: Stage release assets, KSU update.json & compose bilingual release notes
         shell: bash
         env:
           VER: ${{ steps.meta.outputs.version }}
           VCODE: ${{ steps.meta.outputs.version_code }}
           IPC_VER: ${{ steps.meta.outputs.ipc_ver }}
           SHM_VER: ${{ steps.meta.outputs.shm_ver }}
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+          REPO: ${{ github.repository }}
           APK_PATH: ${{ steps.build.outputs.apk_path }}
           SIGNING_MODE: ${{ steps.build.outputs.signing_mode }}
         run: |
@@ -219,8 +222,9 @@ jobs:
           - **版本契约 / Version Contract**: \`v${VER}\` (\`versionCode=${VCODE}\`, \`IPC v${IPC_VER}\`, \`SHM v${SHM_VER}\`)
           - **APK 签名 / Signing**: ${SIGN_ZH} / ${SIGN_EN}
           - **安装包 / Assets**:
-            - \`${ZIP_NAME}\` — All-in-One KernelSU / KSU2 + Zygisk Next 模块（刷入时自动安装配套控制器 App）
+            - \`${ZIP_NAME}\` — All-in-One KernelSU / KSU2 + Zygisk Next 模块（刷入时自动安装配套控制器 App，已集成 KernelSU 在线更新检查）
             - \`${APK_NAME}\` — 独立控制器 & LSPosed 模块 APK（已内置于上方 ZIP，通常无需重复手动安装）
+            - \`update.json\` — KernelSU 管理器在线更新元数据（仅正式 Release 启用）
 
           > **LSPosed 作用域提醒 / LSPosed Scope Reminder**
           > 请**仅勾选**：**系统框架 (\`android\`)** 与 **电话服务 (\`com.android.phone\`)**，**切勿勾选任何目标应用**。
@@ -231,6 +235,37 @@ jobs:
           ${SHA_BLOCK}
           \`\`\`
           EOF
+
+          cp "$RUNNER_TEMP/release_notes.md" "release_assets/changelog.md"
+
+          python3 - <<'PY'
+          import json, os
+
+          ver = os.environ["VER"]
+          vcode = int(os.environ["VCODE"])
+          tag = os.environ["RELEASE_TAG"]
+          repo = os.environ["REPO"]
+          zip_name = f"kuroko-teleport-v{ver}-ksu-module.zip"
+          base = f"https://github.com/{repo}/releases/download/{tag}"
+
+          payload = {
+              "version": tag,
+              "versionCode": vcode,
+              "zipUrl": f"{base}/{zip_name}",
+              "changelog": f"{base}/changelog.md",
+          }
+          out_path = os.path.join("release_assets", "update.json")
+          with open(out_path, "w", encoding="utf-8", newline="\n") as f:
+              json.dump(payload, f, indent=2)
+              f.write("\n")
+
+          # Validate JSON integrity before publishing
+          with open(out_path, "r", encoding="utf-8") as f:
+              loaded = json.load(f)
+          assert loaded["version"] == tag and isinstance(loaded["versionCode"], int) and loaded["versionCode"] == vcode
+          assert loaded["zipUrl"].startswith("https://") and loaded["changelog"].startswith("https://")
+          print("Generated & verified release_assets/update.json:", json.dumps(loaded))
+          PY
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -244,3 +279,5 @@ jobs:
             release_assets/kuroko-teleport-v${{ steps.meta.outputs.version }}-ksu-module.zip
             release_assets/kuroko-teleport-v${{ steps.meta.outputs.version }}-app.apk
             release_assets/SHA256SUMS.txt
+            release_assets/update.json
+            release_assets/changelog.md

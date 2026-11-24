@@ -270,4 +270,28 @@
     <string name="diag_share_chooser">分享 Kuroko Teleport 诊断包</string>
     <string name="diag_export_failed_fmt">导出失败：%1$s</string>
     <string name="diag_clipboard_label">Kuroko Teleport 诊断摘要</string>
+
+    <!-- Release Update Checker -->
+    <string name="settings_update_section">软件更新</string>
+    <string name="settings_update_channel_fmt">当前版本 v%1$s · 渠道：%2$s</string>
+    <string name="settings_update_channel_release">正式版 (Release)</string>
+    <string name="settings_update_channel_ci">CI 构建</string>
+    <string name="settings_update_channel_local">本地开发版</string>
+    <string name="settings_update_auto_title">启动时自动检查更新</string>
+    <string name="settings_update_auto_sub">打开应用时静默检测 GitHub 正式 Release（每 24 小时最多一次）</string>
+    <string name="settings_update_btn_check">手动检查更新</string>
+    <string name="settings_update_btn_checking">正在检查正式版更新…</string>
+    <string name="settings_update_disabled_hint">当前为 CI / 本地开发构建，已禁用更新检测；仅正式 GitHub Release 版本启用更新检测。</string>
+    <string name="update_status_up_to_date_fmt">当前已是最新正式版（v%1$s）</string>
+    <string name="update_status_found_fmt">发现新正式版：%1$s</string>
+    <string name="update_status_failed_fmt">检查更新失败：%1$s</string>
+    <string name="update_toast_open_failed">无法打开浏览器访问更新链接</string>
+    <string name="update_toast_skipped_fmt">已忽略 %1$s 自动弹窗（仍可在设置中手动检查）</string>
+    <string name="update_dialog_title">发现新版本</string>
+    <string name="update_version_diff_fmt">%1$s  →  %2$s</string>
+    <string name="update_published_fmt">发布日期：%1$s</string>
+    <string name="update_ksu_flash_tip">建议在 GitHub Release 下载对应版本的 All-in-One KSU 模块包（.zip），在 KernelSU 管理器中直接刷入并重启，即可同步升级模块与 App。</string>
+    <string name="update_btn_download_zip_fmt">直链下载 KSU 模块包%1$s</string>
+    <string name="update_btn_go">前往更新</string>
+    <string name="update_btn_skip_version">忽略此版本</string>
 </resources>

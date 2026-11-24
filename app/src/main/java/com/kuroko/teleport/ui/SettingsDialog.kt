@@ -34,7 +34,9 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -69,6 +71,7 @@ import com.kuroko.teleport.ipc.VersionCompatInfo
 import com.kuroko.teleport.ipc.VersionCompatState
 import com.kuroko.teleport.ipc.KurokoProtocol
 import com.kuroko.teleport.ipc.KurokoRuntime
+import com.kuroko.teleport.update.UpdateChecker
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
@@ -110,7 +113,12 @@ fun SettingsDialog(
     onResetSteps: () -> Unit,
     onResetSpeedPresets: () -> Unit,
     onOpenHelp: () -> Unit,
-    onOpenDiagnostics: () -> Unit
+    onOpenDiagnostics: () -> Unit,
+    autoCheckUpdate: Boolean,
+    updateCheckBusy: Boolean,
+    updateStatusText: String?,
+    onToggleAutoCheckUpdate: (Boolean) -> Unit,
+    onManualCheckUpdate: () -> Unit
 ) {
     val context = LocalContext.current
     val sensorManager = remember(context) {
@@ -811,6 +819,106 @@ fun SettingsDialog(
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = NeuColors.InsetDark.copy(alpha = 0.45f))
+
+                Text(
+                    text = stringResource(R.string.settings_update_section),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = NeuColors.InkPrimary
+                )
+
+                NeuCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 14.dp, elevation = 3.dp) {
+                    val channelLabel = when (UpdateChecker.buildChannel()) {
+                        "release" -> stringResource(R.string.settings_update_channel_release)
+                        "ci" -> stringResource(R.string.settings_update_channel_ci)
+                        else -> stringResource(R.string.settings_update_channel_local)
+                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(9.dp)
+                    ) {
+                        Text(
+                            text = stringResource(
+                                R.string.settings_update_channel_fmt,
+                                KurokoProtocol.APP_VERSION_NAME,
+                                channelLabel
+                            ),
+                            fontSize = 10.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                            color = NeuColors.InkSecondary
+                        )
+                        if (UpdateChecker.isUpdateCheckSupported()) {
+                            SettingsToggleRow(
+                                title = stringResource(R.string.settings_update_auto_title),
+                                subtitle = stringResource(R.string.settings_update_auto_sub),
+                                checked = autoCheckUpdate,
+                                activeColor = NeuColors.Cobalt,
+                                onCheckedChange = onToggleAutoCheckUpdate
+                            )
+                            NeuButton(
+                                onClick = {
+                                    if (!updateCheckBusy) {
+                                        onManualCheckUpdate()
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                tone = NeuTone.NEUTRAL,
+                                cornerRadius = 11.dp,
+                                contentPadding = PaddingValues(vertical = 9.dp)
+                            ) {
+                                if (updateCheckBusy) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp,
+                                        color = NeuColors.CobaltDeep
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.SystemUpdate,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(
+                                        if (updateCheckBusy) R.string.settings_update_btn_checking
+                                        else R.string.settings_update_btn_check
+                                    ),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            if (!updateStatusText.isNullOrBlank()) {
+                                Text(
+                                    text = updateStatusText,
+                                    fontSize = 10.5.sp,
+                                    lineHeight = 14.sp,
+                                    color = NeuColors.InkSecondary
+                                )
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .neuInset(cornerRadius = 9.dp, surfaceColor = NeuColors.LcdWellBg, depth = 2.dp)
+                                    .padding(horizontal = 9.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.settings_update_disabled_hint),
+                                    fontSize = 10.sp,
+                                    lineHeight = 14.sp,
+                                    color = NeuColors.InkSecondary
+                                )
+                            }
                         }
                     }
                 }
