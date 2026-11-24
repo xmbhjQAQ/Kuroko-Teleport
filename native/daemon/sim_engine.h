@@ -2,6 +2,8 @@
 
 #include "kuroko_shm.h"
 #include "nmea_gnss.h"
+#include "rf_synth.h"
+#include <string>
 #include <vector>
 #include <mutex>
 
@@ -37,6 +39,13 @@ struct SimStatus {
     float jitter_sigma_m;
     float pace_var_ratio;
     uint32_t target_count;
+    std::string rf_country;
+    uint16_t rf_mcc;
+    uint16_t rf_mnc;
+    uint32_t rf_cells;
+    uint32_t rf_wifis;
+    uint32_t rf_bles;
+    std::string rf_serving;
 };
 
 class SimEngine {
@@ -53,6 +62,10 @@ public:
     void set_jitter(float sigma_m);
     void set_pace_var(float ratio);
     void set_targets(const std::vector<KurokoTarget>& targets);
+    void set_rf_config(const RfConfig& cfg);
+    void set_rf_cells(const std::vector<PinnedCell>& cells);
+    void set_rf_wifis(const std::vector<PinnedWifiAp>& wifis);
+    void set_rf_beacons(const std::vector<PinnedBleBeacon>& beacons);
     void reset_steps();
 
     void step(double dt_sec, uint64_t boot_ns, uint64_t utc_ms, KurokoShm* shm);
@@ -126,7 +139,9 @@ private:
     std::vector<KurokoTarget> targets_;
 
     double gnss_accum_sec_ = 1.0;
+    bool rf_dirty_ = true;
     GnssNmeaGenerator gnss_gen_;
+    RfSynthesizer rf_synth_;
 
     uint64_t rng_state_ = 0x9E3779B97F4A7C15ULL;
     float rand_normal();

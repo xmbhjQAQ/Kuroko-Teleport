@@ -1,11 +1,14 @@
 # Allow zygote (preServerSpecialize runs in u:r:zygote:s0 before system_server transition),
-# system_server, and radio (com.android.phone) to use read-only memfd FDs passed from su/magisk
+# system_server, radio (com.android.phone), and bluetooth (com.android.bluetooth) to use
+# read-only memfd FDs passed from su/magisk
 allow zygote su fd use
 allow zygote magisk fd use
 allow system_server su fd use
 allow system_server magisk fd use
 allow radio su fd use
 allow radio magisk fd use
+allow bluetooth su fd use
+allow bluetooth magisk fd use
 
 # Allow read-only mmap/stat of memfd backing files (tmpfs / su_tmpfs / magisk_tmpfs)
 allow zygote tmpfs file { read getattr map }
@@ -17,15 +20,22 @@ allow system_server magisk_tmpfs file { read getattr map }
 allow radio tmpfs file { read getattr map }
 allow radio su_tmpfs file { read getattr map }
 allow radio magisk_tmpfs file { read getattr map }
+allow bluetooth tmpfs file { read getattr map }
+allow bluetooth su_tmpfs file { read getattr map }
+allow bluetooth magisk_tmpfs file { read getattr map }
 
-# Allow root daemon (su/magisk) to transact memfd handoff over Binder to system_server and radio
+# Allow root daemon (su/magisk) to transact memfd handoff over Binder to system_server, radio, and bluetooth
 allow su system_server binder { call transfer }
 allow magisk system_server binder { call transfer }
 allow su radio binder { call transfer }
 allow magisk radio binder { call transfer }
+allow su bluetooth binder { call transfer }
+allow magisk bluetooth binder { call transfer }
 
-# Allow root daemon to look up location and phone services via servicemanager
+# Allow root daemon to look up location, phone, and bluetooth_manager services via servicemanager
 allow su location_service service_manager find
 allow magisk location_service service_manager find
 allow su radio_service service_manager find
 allow magisk radio_service service_manager find
+allow su bluetooth_manager_service service_manager find
+allow magisk bluetooth_manager_service service_manager find

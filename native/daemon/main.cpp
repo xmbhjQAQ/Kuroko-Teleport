@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -42,7 +43,7 @@
 #define KUROKO_MODULE_VERSION_CODE 0
 #endif
 #ifndef KUROKO_IPC_PROTOCOL_VERSION
-#define KUROKO_IPC_PROTOCOL_VERSION 2
+#define KUROKO_IPC_PROTOCOL_VERSION 3
 #endif
 #ifndef KUROKO_SHM_SCHEMA_VERSION
 #define KUROKO_SHM_SCHEMA_VERSION KUROKO_SHM_VERSION
@@ -65,6 +66,7 @@ kuroko::SimEngine g_engine;
 std::atomic<bool> g_loc_shm_ok{false};
 std::atomic<bool> g_phone_shm_ok{false};
 std::atomic<bool> g_sensor_shm_ok{false};
+std::atomic<bool> g_bt_shm_ok{false};
 std::atomic<int32_t> g_xposed_code{0};
 std::atomic<int32_t> g_zygisk_code{0};
 std::mutex g_diag_mu;
@@ -317,7 +319,7 @@ void companion_unix_server_loop() {
     unlink(KUROKO_COMPANION_SOCK_PATH);
 }
 
-/* ===== Dynamic libbinder_ndk.so memfd push to system_server ("location") & com.android.phone ("phone") ===== */
+/* ===== Dynamic libbinder_ndk.so memfd push to system_server ("location"), com.android.phone ("phone") & optional com.android.bluetooth ===== */
 using FnClassOnCreate      = void* (*)(void* args);
 using FnClassOnDestroy     = void (*)(void* userData);
 using FnClassOnTransact    = binder_status_t (*)(AIBinder* binder, transaction_code_t code, const AParcel* in, AParcel* out);
@@ -334,10 +336,13 @@ using FnWritePfd           = binder_status_t (*)(AParcel* parcel, int fd);
 using FnWriteInt32         = binder_status_t (*)(AParcel* parcel, int32_t val);
 using FnReadInt32          = binder_status_t (*)(const AParcel* parcel, int32_t* val);
 using FnReadByteArray      = binder_status_t (*)(const AParcel* parcel, void* arrayData, AParcel_byteArrayAllocator allocator);
+using FnReadStrongBinder   = binder_status_t (*)(const AParcel* parcel, AIBinder** binder);
 using FnDeleteParcel       = void (*)(AParcel* parcel);
 
 static_assert(std::is_same_v<FnReadByteArray, decltype(&::AParcel_readByteArray)>,
               "FnReadByteArray must match NDK AParcel_readByteArray");
+static_assert(std::is_same_v<FnReadStrongBinder, decltype(&::AParcel_readStrongBinder)>,
+              "FnReadStrongBinder must match NDK AParcel_readStrongBinder");
 
 void* binder_stub_on_create(void*) { return nullptr; }
 void binder_stub_on_destroy(void*) {}
@@ -422,11 +427,13 @@ struct BinderNdkApi {
     FnWritePfd writePfd = nullptr;
     FnWriteInt32 writeInt32 = nullptr;
     FnReadInt32 readInt32 = nullptr;
-    FnReadByteArray readByteArray = nullptr; // optional: missing does not fail init
+    FnReadByteArray readByteArray = nullptr;       // optional: missing does not fail init
+    FnReadStrongBinder readStrongBinder = nullptr; // optional: missing disables BT binder handoff
     FnDeleteParcel deleteParcel = nullptr;
 
     AIBinder_Class* clazzLocation = nullptr;
     AIBinder_Class* clazzPhone = nullptr;
+    AIBinder_Class* clazzBluetooth = nullptr;
 
     bool init() {
         handle = dlopen("libbinder_ndk.so", RTLD_NOW);
@@ -434,43 +441,51 @@ struct BinderNdkApi {
             LOGW("dlopen libbinder_ndk.so failed: %s", dlerror());
             return false;
         }
-        classDefine    = reinterpret_cast<FnClassDefine>(dlsym(handle, "AIBinder_Class_define"));
-        associateClass = reinterpret_cast<FnAssociateClass>(dlsym(handle, "AIBinder_associateClass"));
-        checkService   = reinterpret_cast<FnCheckService>(dlsym(handle, "AServiceManager_checkService"));
-        decStrong      = reinterpret_cast<FnDecStrong>(dlsym(handle, "AIBinder_decStrong"));
-        prepareTx      = reinterpret_cast<FnPrepareTx>(dlsym(handle, "AIBinder_prepareTransaction"));
-        transact       = reinterpret_cast<FnTransact>(dlsym(handle, "AIBinder_transact"));
-        writePfd       = reinterpret_cast<FnWritePfd>(dlsym(handle, "AParcel_writeParcelFileDescriptor"));
-        writeInt32     = reinterpret_cast<FnWriteInt32>(dlsym(handle, "AParcel_writeInt32"));
-        readInt32      = reinterpret_cast<FnReadInt32>(dlsym(handle, "AParcel_readInt32"));
-        readByteArray  = reinterpret_cast<FnReadByteArray>(dlsym(handle, "AParcel_readByteArray"));
-        deleteParcel   = reinterpret_cast<FnDeleteParcel>(dlsym(handle, "AParcel_delete"));
+        classDefine      = reinterpret_cast<FnClassDefine>(dlsym(handle, "AIBinder_Class_define"));
+        associateClass   = reinterpret_cast<FnAssociateClass>(dlsym(handle, "AIBinder_associateClass"));
+        checkService     = reinterpret_cast<FnCheckService>(dlsym(handle, "AServiceManager_checkService"));
+        decStrong        = reinterpret_cast<FnDecStrong>(dlsym(handle, "AIBinder_decStrong"));
+        prepareTx        = reinterpret_cast<FnPrepareTx>(dlsym(handle, "AIBinder_prepareTransaction"));
+        transact         = reinterpret_cast<FnTransact>(dlsym(handle, "AIBinder_transact"));
+        writePfd         = reinterpret_cast<FnWritePfd>(dlsym(handle, "AParcel_writeParcelFileDescriptor"));
+        writeInt32       = reinterpret_cast<FnWriteInt32>(dlsym(handle, "AParcel_writeInt32"));
+        readInt32        = reinterpret_cast<FnReadInt32>(dlsym(handle, "AParcel_readInt32"));
+        readByteArray    = reinterpret_cast<FnReadByteArray>(dlsym(handle, "AParcel_readByteArray"));
+        readStrongBinder = reinterpret_cast<FnReadStrongBinder>(dlsym(handle, "AParcel_readStrongBinder"));
+        deleteParcel     = reinterpret_cast<FnDeleteParcel>(dlsym(handle, "AParcel_delete"));
         if (!classDefine || !associateClass || !checkService || !decStrong ||
             !prepareTx || !transact || !writePfd || !writeInt32 || !readInt32 || !deleteParcel) {
             LOGE("Missing required symbols in libbinder_ndk.so");
             return false;
         }
-        clazzLocation = classDefine("android.location.ILocationManager",
-                                    binder_stub_on_create, binder_stub_on_destroy, binder_stub_on_transact);
-        clazzPhone    = classDefine("com.android.internal.telephony.ITelephony",
-                                    binder_stub_on_create, binder_stub_on_destroy, binder_stub_on_transact);
+        clazzLocation  = classDefine("android.location.ILocationManager",
+                                     binder_stub_on_create, binder_stub_on_destroy, binder_stub_on_transact);
+        clazzPhone     = classDefine("com.android.internal.telephony.ITelephony",
+                                     binder_stub_on_create, binder_stub_on_destroy, binder_stub_on_transact);
+        clazzBluetooth = classDefine("android.bluetooth.IBluetooth",
+                                     binder_stub_on_create, binder_stub_on_destroy, binder_stub_on_transact);
         if (!clazzLocation || !clazzPhone) {
             LOGE("AIBinder_Class_define failed (location=%p phone=%p)", clazzLocation, clazzPhone);
             return false;
         }
+        if (!clazzBluetooth || !readStrongBinder) {
+            LOGW("Optional Bluetooth binder bridge unavailable (clazz=%p readStrongBinder=%p)",
+                 clazzBluetooth, reinterpret_cast<void*>(readStrongBinder));
+        }
         return true;
     }
 
-    int32_t ping_service(const char* svc_name, const AIBinder_Class* clazz,
-                         int32_t* out_sensor_ok = nullptr,
-                         std::string* out_sensor_diag = nullptr) {
+    int32_t ping_binder(AIBinder* b, const AIBinder_Class* clazz, const char* label,
+                        int32_t* out_sensor_ok = nullptr,
+                        std::string* out_sensor_diag = nullptr,
+                        bool quiet = false) {
         if (out_sensor_ok) *out_sensor_ok = -1;
         if (out_sensor_diag) out_sensor_diag->clear();
-        AIBinder* b = checkService(svc_name);
         if (!b) return -1;
         if (!clazz || !associateClass(b, clazz)) {
-            LOGW("AIBinder_associateClass failed for service '%s'", svc_name);
-            decStrong(b);
+            if (!quiet) {
+                LOGW("AIBinder_associateClass failed for service '%s'", label);
+            }
             return -1;
         }
         AParcel* in = nullptr;
@@ -503,16 +518,28 @@ struct BinderNdkApi {
         }
         if (in) deleteParcel(in);
         if (out) deleteParcel(out);
+        return mapped;
+    }
+
+    int32_t ping_service(const char* svc_name, const AIBinder_Class* clazz,
+                         int32_t* out_sensor_ok = nullptr,
+                         std::string* out_sensor_diag = nullptr) {
+        if (out_sensor_ok) *out_sensor_ok = -1;
+        if (out_sensor_diag) out_sensor_diag->clear();
+        AIBinder* b = checkService(svc_name);
+        if (!b) return -1;
+        int32_t mapped = ping_binder(b, clazz, svc_name, out_sensor_ok, out_sensor_diag, false);
         decStrong(b);
         return mapped;
     }
 
-    bool push_shm_to_service(const char* svc_name, const AIBinder_Class* clazz, int memfd) {
-        AIBinder* b = checkService(svc_name);
+    bool push_shm_to_binder(AIBinder* b, const AIBinder_Class* clazz, const char* label,
+                            int memfd, bool quiet = false) {
         if (!b) return false;
         if (!clazz || !associateClass(b, clazz)) {
-            LOGW("AIBinder_associateClass failed for service '%s'", svc_name);
-            decStrong(b);
+            if (!quiet) {
+                LOGW("AIBinder_associateClass failed for service '%s'", label);
+            }
             return false;
         }
         AParcel* in = nullptr;
@@ -532,8 +559,43 @@ struct BinderNdkApi {
         }
         if (in) deleteParcel(in);
         if (out) deleteParcel(out);
+        return ok;
+    }
+
+    bool push_shm_to_service(const char* svc_name, const AIBinder_Class* clazz, int memfd) {
+        AIBinder* b = checkService(svc_name);
+        if (!b) return false;
+        bool ok = push_shm_to_binder(b, clazz, svc_name, memfd, false);
         decStrong(b);
         return ok;
+    }
+
+    AIBinder* query_bluetooth_binder() {
+        if (!readStrongBinder || !clazzBluetooth || !clazzLocation) return nullptr;
+        AIBinder* loc = checkService("location");
+        if (!loc) return nullptr;
+        if (!associateClass(loc, clazzLocation)) {
+            decStrong(loc);
+            return nullptr;
+        }
+        AParcel* in = nullptr;
+        AParcel* out = nullptr;
+        AIBinder* bt = nullptr;
+        if (prepareTx(loc, &in) == 0 && in) {
+            if (writeInt32(in, static_cast<int32_t>(KUROKO_SHM_MAGIC)) == 0 &&
+                transact(loc, KUROKO_BINDER_TX_GET_BT_BINDER, &in, &out, 0) == 0 && out) {
+                int32_t exc = 0;
+                AIBinder* raw_bt = nullptr;
+                if (readInt32(out, &exc) == 0 && exc == 0 &&
+                    readStrongBinder(out, &raw_bt) == 0 && raw_bt != nullptr) {
+                    bt = raw_bt;
+                }
+            }
+        }
+        if (in) deleteParcel(in);
+        if (out) deleteParcel(out);
+        decStrong(loc);
+        return bt;
     }
 };
 
@@ -554,6 +616,7 @@ void binder_pusher_loop() {
         {"phone",    api.clazzPhone,    &g_phone_shm_ok},
     };
     bool pushed[2] = {false, false};
+    bool bt_pushed = false;
     int32_t prev_sensor_state = -1;
     std::string prev_diag_key;
     bool logged_first_diag = false;
@@ -623,6 +686,54 @@ void binder_pusher_loop() {
                 }
             }
         }
+
+        // Optional Bluetooth SHM handoff via system_server cached IBluetooth binder
+        if (pushed[0]) {
+            AIBinder* bt = api.query_bluetooth_binder();
+            if (bt) {
+                int32_t bt_state = api.ping_binder(bt, api.clazzBluetooth, "bluetooth",
+                                                   nullptr, nullptr, /*quiet=*/true);
+                if (bt_state == 1) {
+                    g_bt_shm_ok.store(true, std::memory_order_relaxed);
+                    if (!bt_pushed) {
+                        LOGI("Service 'bluetooth' reports SHM already mapped");
+                        write_daemon_log(false, "binder_handoff ok service=bluetooth mode=already_mapped memfd_ro=%d",
+                                         g_memfd_ro);
+                        bt_pushed = true;
+                    }
+                } else if (bt_state == 0) {
+                    bt_pushed = false;
+                    g_bt_shm_ok.store(false, std::memory_order_relaxed);
+                    if (api.push_shm_to_binder(bt, api.clazzBluetooth, "bluetooth", g_memfd_ro, /*quiet=*/true)) {
+                        LOGI("Successfully pushed read-only memfd=%d to Binder service 'bluetooth'",
+                             g_memfd_ro);
+                        write_daemon_log(false, "binder_handoff ok service=bluetooth mode=pushed memfd_ro=%d",
+                                         g_memfd_ro);
+                        bt_pushed = true;
+                        g_bt_shm_ok.store(true, std::memory_order_relaxed);
+                    }
+                } else {
+                    if (bt_pushed) {
+                        LOGI("Service 'bluetooth' hook unreachable (state=%d); marking bt_shm=0", bt_state);
+                        write_daemon_log(false, "binder_handoff lost service=bluetooth state=%d", bt_state);
+                        bt_pushed = false;
+                    }
+                    g_bt_shm_ok.store(false, std::memory_order_relaxed);
+                }
+                api.decStrong(bt);
+            } else {
+                if (bt_pushed) {
+                    LOGI("Service 'bluetooth' binder cleared (BT off or restarting); marking bt_shm=0");
+                    write_daemon_log(false, "binder_handoff cleared service=bluetooth");
+                    bt_pushed = false;
+                }
+                g_bt_shm_ok.store(false, std::memory_order_relaxed);
+            }
+        } else {
+            bt_pushed = false;
+            g_bt_shm_ok.store(false, std::memory_order_relaxed);
+        }
+
         bool active_now = g_engine.get_status().active;
         sleep((pushed[0] && pushed[1] && !active_now) ? 5 : 2);
     }
@@ -636,7 +747,9 @@ std::string format_status_json() {
         std::lock_guard<std::mutex> dlk(g_diag_mu);
         diag_esc = json_escape(g_sensor_diag);
     }
-    char buf[2048];
+    std::string rf_country_esc = json_escape(s.rf_country);
+    std::string rf_serving_esc = json_escape(s.rf_serving);
+    char buf[3072];
     std::snprintf(
         buf, sizeof(buf),
         "{\"active\":%d,\"moving\":%d,\"loop\":%d,"
@@ -645,9 +758,11 @@ std::string format_status_json() {
         "\"dist\":%.2f,\"route_len\":%.2f,\"max_dist\":%.2f,\"laps\":%u,\"max_laps\":%u,"
         "\"steps\":%llu,\"cadence\":%.1f,\"stride\":%.3f,"
         "\"mode\":%u,\"carry\":%u,\"jitter\":%.2f,\"pace_var\":%.3f,\"targets\":%u,"
-        "\"loc_shm\":%d,\"phone_shm\":%d,\"sensor_shm\":%d,\"sensor_diag\":\"%s\","
+        "\"loc_shm\":%d,\"phone_shm\":%d,\"sensor_shm\":%d,\"bt_shm\":%d,\"sensor_diag\":\"%s\","
         "\"mod_ver\":\"%s\",\"mod_code\":%d,\"proto_ver\":%d,\"shm_ver\":%d,"
-        "\"min_app_code\":%d,\"xposed_code\":%d,\"zygisk_code\":%d}\n",
+        "\"min_app_code\":%d,\"xposed_code\":%d,\"zygisk_code\":%d,"
+        "\"rf_country\":\"%s\",\"rf_mcc\":%u,\"rf_mnc\":%u,"
+        "\"rf_cells\":%u,\"rf_wifis\":%u,\"rf_bles\":%u,\"rf_serving\":\"%s\"}\n",
         s.active ? 1 : 0, s.moving ? 1 : 0, s.loop ? 1 : 0,
         s.lat, s.lon, s.alt,
         s.speed_mps, s.target_speed_mps, s.bearing_deg, s.h_accuracy_m,
@@ -657,6 +772,7 @@ std::string format_status_json() {
         g_loc_shm_ok.load(std::memory_order_relaxed) ? 1 : 0,
         g_phone_shm_ok.load(std::memory_order_relaxed) ? 1 : 0,
         g_sensor_shm_ok.load(std::memory_order_relaxed) ? 1 : 0,
+        g_bt_shm_ok.load(std::memory_order_relaxed) ? 1 : 0,
         diag_esc.c_str(),
         KUROKO_MODULE_VERSION_NAME,
         KUROKO_MODULE_VERSION_CODE,
@@ -664,8 +780,132 @@ std::string format_status_json() {
         KUROKO_SHM_SCHEMA_VERSION,
         KUROKO_MIN_COMPAT_APP_CODE,
         g_xposed_code.load(std::memory_order_relaxed),
-        g_zygisk_code.load(std::memory_order_relaxed));
+        g_zygisk_code.load(std::memory_order_relaxed),
+        rf_country_esc.c_str(),
+        static_cast<unsigned int>(s.rf_mcc),
+        static_cast<unsigned int>(s.rf_mnc),
+        static_cast<unsigned int>(s.rf_cells),
+        static_cast<unsigned int>(s.rf_wifis),
+        static_cast<unsigned int>(s.rf_bles),
+        rf_serving_esc.c_str());
     return std::string(buf);
+}
+
+std::vector<std::string> split_fields(const std::string& s, char delim) {
+    std::vector<std::string> out;
+    size_t start = 0;
+    while (true) {
+        size_t pos = s.find(delim, start);
+        if (pos == std::string::npos) {
+            out.push_back(s.substr(start));
+            break;
+        }
+        out.push_back(s.substr(start, pos - start));
+        start = pos + 1;
+    }
+    return out;
+}
+
+int hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+bool decode_hex_bytes(const std::string& hex, uint8_t* out, size_t expected_len) {
+    if (hex.size() != expected_len * 2) return false;
+    for (size_t i = 0; i < expected_len; ++i) {
+        int hi = hex_nibble(hex[i * 2]);
+        int lo = hex_nibble(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return false;
+        out[i] = static_cast<uint8_t>((hi << 4) | lo);
+    }
+    return true;
+}
+
+bool decode_hex_str(const std::string& hex, std::string* out, size_t max_bytes) {
+    out->clear();
+    if (hex.empty()) return true;
+    if ((hex.size() & 1u) != 0) return false;
+    const size_t n = hex.size() / 2;
+    out->reserve(n < max_bytes ? n : max_bytes);
+    for (size_t i = 0; i < n; ++i) {
+        int hi = hex_nibble(hex[i * 2]);
+        int lo = hex_nibble(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) {
+            out->clear();
+            return false;
+        }
+        if (out->size() < max_bytes) {
+            out->push_back(static_cast<char>((hi << 4) | lo));
+        }
+    }
+    return true;
+}
+
+bool decode_base64_str(const std::string& b64, std::string* out, size_t max_bytes) {
+    out->clear();
+    if (b64.empty()) return true;
+    uint32_t acc = 0;
+    int bits = 0;
+    for (char c : b64) {
+        if (c == '=') break;
+        int v = -1;
+        if (c >= 'A' && c <= 'Z') v = c - 'A';
+        else if (c >= 'a' && c <= 'z') v = c - 'a' + 26;
+        else if (c >= '0' && c <= '9') v = c - '0' + 52;
+        else if (c == '+' || c == '-') v = 62;
+        else if (c == '/' || c == '_') v = 63;
+        else {
+            out->clear();
+            return false;
+        }
+        acc = (acc << 6) | static_cast<uint32_t>(v);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            char byte_val = static_cast<char>((acc >> bits) & 0xFFu);
+            if (out->size() < max_bytes) {
+                out->push_back(byte_val);
+            }
+        }
+    }
+    return true;
+}
+
+bool parse_u64_strict(const std::string& s, uint64_t* out, int base = 10) {
+    if (s.empty() || s[0] == '-') return false;
+    errno = 0;
+    char* endp = nullptr;
+    unsigned long long v = std::strtoull(s.c_str(), &endp, base);
+    if (errno != 0 || !endp || endp == s.c_str() || *endp != '\0') return false;
+    *out = static_cast<uint64_t>(v);
+    return true;
+}
+
+bool parse_i64_strict(const std::string& s, int64_t* out, int base = 10) {
+    if (s.empty()) return false;
+    errno = 0;
+    char* endp = nullptr;
+    long long v = std::strtoll(s.c_str(), &endp, base);
+    if (errno != 0 || !endp || endp == s.c_str() || *endp != '\0') return false;
+    *out = static_cast<int64_t>(v);
+    return true;
+}
+
+bool parse_double_strict(const std::string& s, double* out) {
+    if (s.empty()) return false;
+    errno = 0;
+    char* endp = nullptr;
+    double v = std::strtod(s.c_str(), &endp);
+    if (errno != 0 || !endp || endp == s.c_str() || *endp != '\0' || !std::isfinite(v)) return false;
+    *out = v;
+    return true;
+}
+
+bool is_auto_token(const std::string& s) {
+    return s.empty() || s == "-" || s == "AUTO" || s == "auto" || s == "Auto";
 }
 
 bool is_valid_bcp47_tag(const std::string& tag) {
@@ -830,6 +1070,180 @@ std::string handle_command(const std::string& line) {
         if (pts.empty()) return "ERR EMPTY_ROUTE\n";
         g_engine.set_route(pts, loop_i != 0, max_dist, max_laps);
         return "OK SET_ROUTE " + std::to_string(pts.size()) + "\n";
+    } else if (cmd == "SET_RF_CONFIG") {
+        std::string flags_str, mcc_str, mnc_str, digits_str, iso_str, alpha_b64;
+        if (!(iss >> flags_str >> mcc_str >> mnc_str >> digits_str >> iso_str)) {
+            return "ERR BAD_ARGS\n";
+        }
+        if (!(iss >> alpha_b64)) {
+            alpha_b64 = "AUTO";
+        }
+        uint64_t flags_v = 0, mcc_v = 0, mnc_v = 0, digits_v = 2;
+        if (!parse_u64_strict(flags_str, &flags_v, 0) ||
+            !parse_u64_strict(mcc_str, &mcc_v, 10) ||
+            !parse_u64_strict(mnc_str, &mnc_v, 10) ||
+            !parse_u64_strict(digits_str, &digits_v, 10)) {
+            return "ERR BAD_ARGS\n";
+        }
+        if (mcc_v > 999 || mnc_v > 999 || (digits_v != 2 && digits_v != 3)) {
+            return "ERR BAD_ARGS\n";
+        }
+        kuroko::RfConfig cfg;
+        cfg.rf_flags = static_cast<uint32_t>(flags_v);
+        cfg.carrier_mcc = static_cast<uint16_t>(mcc_v);
+        cfg.carrier_mnc = static_cast<uint16_t>(mnc_v);
+        cfg.mnc_digits = static_cast<uint8_t>(digits_v);
+        if (!is_auto_token(iso_str)) {
+            if (iso_str.size() != 2) return "ERR BAD_ARGS\n";
+            char c0 = iso_str[0];
+            char c1 = iso_str[1];
+            auto to_lower_alpha = [](char c, char* out) {
+                if (c >= 'a' && c <= 'z') { *out = c; return true; }
+                if (c >= 'A' && c <= 'Z') { *out = static_cast<char>(c - 'A' + 'a'); return true; }
+                return false;
+            };
+            char l0 = 0, l1 = 0;
+            if (!to_lower_alpha(c0, &l0) || !to_lower_alpha(c1, &l1)) return "ERR BAD_ARGS\n";
+            cfg.country_iso.assign({l0, l1});
+        }
+        if (!is_auto_token(alpha_b64)) {
+            if (!decode_base64_str(alpha_b64, &cfg.carrier_alpha, 15)) {
+                return "ERR BAD_ARGS\n";
+            }
+        }
+        g_engine.set_rf_config(cfg);
+        return "OK SET_RF_CONFIG\n";
+    } else if (cmd == "SET_RF_CELLS") {
+        std::string spec;
+        if (!(iss >> spec)) return "ERR BAD_ARGS\n";
+        std::vector<kuroko::PinnedCell> list;
+        if (spec != "NONE") {
+            auto records = split_fields(spec, ';');
+            for (const auto& rec : records) {
+                if (rec.empty()) continue;
+                if (list.size() >= 4) break;
+                auto f = split_fields(rec, ':');
+                if (f.size() != 12) return "ERR BAD_ARGS\n";
+                uint64_t rat_v = 0, mcc_v = 0, mnc_v = 0, dig_v = 2;
+                uint64_t tac_v = 0, ci_v = 0, pci_v = 0, arfcn_v = 0, band_v = 0;
+                int64_t rsrp_v = -78;
+                double pin_lat = 999.0, pin_lon = 999.0;
+                if (!parse_u64_strict(f[0], &rat_v) ||
+                    !parse_u64_strict(f[1], &mcc_v) ||
+                    !parse_u64_strict(f[2], &mnc_v) ||
+                    !parse_u64_strict(f[3], &dig_v) ||
+                    !parse_u64_strict(f[4], &tac_v) ||
+                    !parse_u64_strict(f[5], &ci_v) ||
+                    !parse_u64_strict(f[6], &pci_v) ||
+                    !parse_u64_strict(f[7], &arfcn_v) ||
+                    !parse_u64_strict(f[8], &band_v) ||
+                    !parse_i64_strict(f[9], &rsrp_v) ||
+                    !parse_double_strict(f[10], &pin_lat) ||
+                    !parse_double_strict(f[11], &pin_lon)) {
+                    return "ERR BAD_ARGS\n";
+                }
+                if (mcc_v > 999 || mnc_v > 999 || pci_v > 1007) return "ERR BAD_ARGS\n";
+                kuroko::PinnedCell c;
+                c.rat = (rat_v == KUROKO_RAT_NR) ? KUROKO_RAT_NR : KUROKO_RAT_LTE;
+                c.mcc = static_cast<uint16_t>(mcc_v);
+                c.mnc = static_cast<uint16_t>(mnc_v);
+                c.mnc_digits = (dig_v == 3) ? 3 : 2;
+                c.tac = static_cast<uint32_t>(tac_v & 0xFFFFFFu);
+                c.ci = ci_v;
+                c.pci = static_cast<uint16_t>(pci_v);
+                c.arfcn = static_cast<uint32_t>(arfcn_v);
+                c.band = static_cast<uint16_t>(band_v);
+                if (rsrp_v < -140) rsrp_v = -140;
+                if (rsrp_v > -44) rsrp_v = -44;
+                c.rsrp_dbm = static_cast<int32_t>(rsrp_v);
+                c.pin_lat = pin_lat;
+                c.pin_lon = pin_lon;
+                list.push_back(c);
+            }
+        }
+        g_engine.set_rf_cells(list);
+        return "OK SET_RF_CELLS " + std::to_string(list.size()) + "\n";
+    } else if (cmd == "SET_RF_WIFIS") {
+        std::string spec;
+        if (!(iss >> spec)) return "ERR BAD_ARGS\n";
+        std::vector<kuroko::PinnedWifiAp> list;
+        if (spec != "NONE") {
+            auto records = split_fields(spec, ';');
+            for (const auto& rec : records) {
+                if (rec.empty()) continue;
+                if (list.size() >= 8) break;
+                auto f = split_fields(rec, ':');
+                if (f.size() != 7) return "ERR BAD_ARGS\n";
+                kuroko::PinnedWifiAp ap;
+                if (!decode_hex_bytes(f[0], ap.bssid, 6)) return "ERR BAD_ARGS\n";
+                int64_t freq_v = 2437, rssi_v = -52;
+                uint64_t flags_v = 0;
+                double pin_lat = 999.0, pin_lon = 999.0;
+                if (!parse_i64_strict(f[1], &freq_v) ||
+                    !parse_i64_strict(f[2], &rssi_v) ||
+                    !parse_u64_strict(f[3], &flags_v, 0) ||
+                    !parse_double_strict(f[4], &pin_lat) ||
+                    !parse_double_strict(f[5], &pin_lon) ||
+                    !decode_hex_str(f[6], &ap.ssid, 32)) {
+                    return "ERR BAD_ARGS\n";
+                }
+                if (freq_v < 2400 || freq_v > 7125) freq_v = 2437;
+                if (rssi_v < -100) rssi_v = -100;
+                if (rssi_v > -20) rssi_v = -20;
+                ap.frequency_mhz = static_cast<int32_t>(freq_v);
+                ap.rssi_dbm = static_cast<int32_t>(rssi_v);
+                ap.flags = static_cast<uint8_t>(flags_v & 0xFFu);
+                ap.pin_lat = pin_lat;
+                ap.pin_lon = pin_lon;
+                list.push_back(std::move(ap));
+            }
+        }
+        g_engine.set_rf_wifis(list);
+        return "OK SET_RF_WIFIS " + std::to_string(list.size()) + "\n";
+    } else if (cmd == "SET_RF_BEACONS") {
+        std::string spec;
+        if (!(iss >> spec)) return "ERR BAD_ARGS\n";
+        std::vector<kuroko::PinnedBleBeacon> list;
+        if (spec != "NONE") {
+            auto records = split_fields(spec, ';');
+            for (const auto& rec : records) {
+                if (rec.empty()) continue;
+                if (list.size() >= 8) break;
+                auto f = split_fields(rec, ':');
+                if (f.size() != 9) return "ERR BAD_ARGS\n";
+                kuroko::PinnedBleBeacon b;
+                if (!decode_hex_bytes(f[0], b.mac, 6)) return "ERR BAD_ARGS\n";
+                uint64_t type_v = 0, major_v = 0, minor_v = 0;
+                int64_t tx_pwr_v = -59;
+                double pin_lat = 999.0, pin_lon = 999.0;
+                if (!parse_u64_strict(f[1], &type_v)) return "ERR BAD_ARGS\n";
+                if (!f[2].empty() && !decode_hex_bytes(f[2], b.uuid, 16)) {
+                    return "ERR BAD_ARGS\n";
+                }
+                if (!parse_u64_strict(f[3], &major_v) ||
+                    !parse_u64_strict(f[4], &minor_v) ||
+                    !parse_i64_strict(f[5], &tx_pwr_v) ||
+                    !parse_double_strict(f[6], &pin_lat) ||
+                    !parse_double_strict(f[7], &pin_lon) ||
+                    !decode_hex_str(f[8], &b.name, 24)) {
+                    return "ERR BAD_ARGS\n";
+                }
+                if (major_v > 65535 || minor_v > 65535) return "ERR BAD_ARGS\n";
+                if (tx_pwr_v < -100) tx_pwr_v = -100;
+                if (tx_pwr_v > 20) tx_pwr_v = 20;
+                b.device_type = (type_v == KUROKO_BLE_TYPE_IBEACON)
+                                    ? KUROKO_BLE_TYPE_IBEACON
+                                    : KUROKO_BLE_TYPE_GENERIC;
+                b.major = static_cast<uint16_t>(major_v);
+                b.minor = static_cast<uint16_t>(minor_v);
+                b.tx_power_dbm = static_cast<int8_t>(tx_pwr_v);
+                b.pin_lat = pin_lat;
+                b.pin_lon = pin_lon;
+                list.push_back(std::move(b));
+            }
+        }
+        g_engine.set_rf_beacons(list);
+        return "OK SET_RF_BEACONS " + std::to_string(list.size()) + "\n";
     }
     return "ERR UNKNOWN_CMD\n";
 }

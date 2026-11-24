@@ -152,6 +152,7 @@ void SimEngine::set_point(double lat, double lon, double alt) {
     moving_ = false;
     current_speed_mps_ = 0.0f;
     route_epoch_++;
+    rf_dirty_ = true;
 }
 
 void SimEngine::set_route(const std::vector<Waypoint>& pts, bool loop, float max_distance_m, uint32_t max_laps) {
@@ -163,6 +164,7 @@ void SimEngine::set_route(const std::vector<Waypoint>& pts, bool loop, float max
     total_distance_m_ = 0.0;
     lap_count_ = 0;
     route_epoch_++;
+    rf_dirty_ = true;
 
     if (pts.empty()) {
         samples_.clear();
@@ -313,6 +315,30 @@ void SimEngine::set_targets(const std::vector<KurokoTarget>& targets) {
     }
 }
 
+void SimEngine::set_rf_config(const RfConfig& cfg) {
+    std::lock_guard<std::mutex> lk(mu_);
+    rf_synth_.set_config(cfg);
+    rf_dirty_ = true;
+}
+
+void SimEngine::set_rf_cells(const std::vector<PinnedCell>& cells) {
+    std::lock_guard<std::mutex> lk(mu_);
+    rf_synth_.set_pinned_cells(cells);
+    rf_dirty_ = true;
+}
+
+void SimEngine::set_rf_wifis(const std::vector<PinnedWifiAp>& wifis) {
+    std::lock_guard<std::mutex> lk(mu_);
+    rf_synth_.set_pinned_wifis(wifis);
+    rf_dirty_ = true;
+}
+
+void SimEngine::set_rf_beacons(const std::vector<PinnedBleBeacon>& beacons) {
+    std::lock_guard<std::mutex> lk(mu_);
+    rf_synth_.set_pinned_beacons(beacons);
+    rf_dirty_ = true;
+}
+
 void SimEngine::reset_steps() {
     std::lock_guard<std::mutex> lk(mu_);
     virtual_steps_ = 0;
@@ -443,7 +469,12 @@ void SimEngine::update_biomechanics_locked(double dt_sec, uint64_t boot_ns, floa
         a_up_lin
     };
     float gw[3] = {0.0f, 0.0f, kGravity};
-    float mag_w[3] = {0.0f, 28.5f, -41.0f}; // Typical mid-latitude geomagnetic vector (uT, ENU)
+    float lat_rad = static_cast<float>(disp_lat_ * kDegToRad);
+    float mag_w[3] = {
+        0.0f,
+        31.0f * std::cos(lat_rad),
+        -62.0f * std::sin(lat_rad)
+    }; // Latitude-aware Earth dipole geomagnetic vector (uT, ENU)
 
     rotate_world_to_body(q_curr, gw, gravity_);
     rotate_world_to_body(q_curr, aw_lin, lin_accel_);
@@ -607,13 +638,18 @@ void SimEngine::step(double dt_sec, uint64_t boot_ns, uint64_t utc_ms, KurokoShm
         shm->targets[i] = targets_[i];
     }
 
-    // 1Hz GNSS SV constellation & NMEA refresh
+    // 1Hz GNSS SV constellation, NMEA & global RF refresh (immediate RF refresh on config/pin/teleport change)
     gnss_accum_sec_ += dt;
     if (gnss_accum_sec_ >= 1.0) {
         gnss_gen_.update(disp_lat_, disp_lon_, disp_alt_, shm->msl_alt,
                          shm->speed_mps, cur_bearing_deg_, cur_h_acc_m_,
                          utc_ms, gnss_accum_sec_, shm);
+        rf_synth_.update(disp_lat_, disp_lon_, boot_ns, gnss_accum_sec_, shm);
         gnss_accum_sec_ = 0.0;
+        rf_dirty_ = false;
+    } else if (rf_dirty_) {
+        rf_synth_.update(disp_lat_, disp_lon_, boot_ns, dt, shm);
+        rf_dirty_ = false;
     }
 
     std::atomic_thread_fence(std::memory_order_release);
@@ -622,6 +658,7 @@ void SimEngine::step(double dt_sec, uint64_t boot_ns, uint64_t utc_ms, KurokoShm
 
 SimStatus SimEngine::get_status() const {
     std::lock_guard<std::mutex> lk(mu_);
+    RfTelemetry rf = rf_synth_.get_telemetry();
     return SimStatus{
         active_, moving_, loop_,
         disp_lat_, disp_lon_, disp_alt_,
@@ -636,6 +673,13 @@ SimStatus SimEngine::get_status() const {
         jitter_sigma_m_,
         pace_var_ratio_,
         static_cast<uint32_t>(targets_.size()),
+        std::move(rf.country_iso),
+        rf.mcc,
+        rf.mnc,
+        rf.cell_count,
+        rf.wifi_count,
+        rf.ble_count,
+        std::move(rf.serving_summary),
     };
 }
 

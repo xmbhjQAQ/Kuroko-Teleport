@@ -61,6 +61,7 @@ add_executable(kuroko_daemon
     daemon/main.cpp
     daemon/sim_engine.cpp
     daemon/nmea_gnss.cpp
+    daemon/rf_synth.cpp
 )
 target_link_libraries(kuroko_daemon log dl)
 
