@@ -91,12 +91,22 @@
     <!-- Target app selector sheet -->
     <string name="target_sheet_title">Target Apps (%1$d/%2$d)</string>
     <string name="target_btn_apply">Apply</string>
-    <string name="target_zero_inject_banner">Zero target app injection: enable only System Framework and Phone Services in LSPosed. Per-UID isolation policies are dispatched here.</string>
+    <string name="target_zero_inject_banner">Zero target app injection: enable only System Framework, Phone Services, and optionally Bluetooth in LSPosed. Per-UID isolation &amp; RF policies are dispatched here.</string>
     <string name="target_cd_clear">Clear</string>
     <string name="target_search_placeholder">Search app name / package / UID</string>
     <string name="target_toggle_system_apps">System</string>
-    <string name="target_policy_strict">Strict (No Wi-Fi/Cell)</string>
-    <string name="target_policy_local_outdoor">Outdoor (Keep Cell)</string>
+    <string name="target_policy_all_spoof">Full Spoof</string>
+    <string name="target_policy_strict">Strict Hide</string>
+    <string name="target_policy_local_outdoor">Outdoor</string>
+    <string name="target_policy_custom_toggle">Fine-Grained RF Policy</string>
+    <string name="target_policy_custom_badge">Custom</string>
+    <string name="target_rf_cell">Cell</string>
+    <string name="target_rf_wifi">Wi-Fi</string>
+    <string name="target_rf_ble">BLE</string>
+    <string name="target_rf_mode_pass">Pass</string>
+    <string name="target_rf_mode_hide">Hide</string>
+    <string name="target_rf_mode_spoof">Spoof</string>
+    <string name="target_bt_scope_hint">Bluetooth hook inactive (B-): enable Bluetooth (com.android.bluetooth) in LSPosed and reboot to activate BLE hide/spoof.</string>
 
     <!-- Help guide sheet -->
     <string name="help_title">Kuroko Teleport Guide &amp; Parameter Reference</string>
@@ -125,8 +135,8 @@
     <string name="help_sec3_b2_body">Real runners never move at a robotic constant speed. Setting ±%1$d%% introduces dual-timescale natural pace drift plus slight corner slowdowns, with the live fastest–slowest pace range shown on the panel.</string>
     <string name="help_sec3_b3_head">GPS Jitter (Default 2.0m)</string>
     <string name="help_sec3_b3_body">Simulates colored slow drift of real outdoor GNSS signals so recorded tracks avoid unnatural ruler-straight lines.</string>
-    <string name="help_sec3_b4_head">Strict vs Outdoor Policy</string>
-    <string name="help_sec3_b4_body">\"Strict\" hides both real Wi-Fi scan lists and cell towers—ideal for cross-city spoofing. \"Outdoor\" hides indoor Wi-Fi while preserving real local cell towers to reduce no-cell risk flags in certain apps.</string>
+    <string name="help_sec3_b4_head">RF Isolation &amp; Spoof Policies</string>
+    <string name="help_sec3_b4_body">\"Full Spoof\" synthesizes geo-matched Cell towers, regional Wi-Fi AP lists, and BLE beacons; \"Strict Hide\" conceals real Wi-Fi, cell towers, and BLE; \"Outdoor\" hides indoor Wi-Fi while preserving real local cell towers. Expand any app card for per-radio Pass/Hide/Spoof control.</string>
 
     <string name="help_sec4_title">4. Top Hardware Status LED Legend</string>
     <string name="help_led_engine_tag">ENG ●</string>
@@ -139,7 +149,7 @@
     <string name="help_sec5_b1_head">Auto-Hold on Completion (No Instant Teleport)</string>
     <string name="help_sec5_b1_body">When your target laps or distance is reached, the engine switches to \"Done · Holding\" at the finish point instead of shutting off abruptly. Switch back to your fitness app, finish and upload the workout first, then return to Kuroko Teleport and tap \"Stop\".</string>
     <string name="help_sec5_b2_head">LSPosed Scope Rule</string>
-    <string name="help_sec5_b2_body">In LSPosed Manager, enable ONLY \"System Framework (android)\" and \"Phone Services (com.android.phone)\". Never enable any target app! All per-UID isolation happens seamlessly at the system layer.</string>
+    <string name="help_sec5_b2_body">In LSPosed Manager, enable ONLY \"System Framework (android)\", \"Phone Services (com.android.phone)\", and optionally \"Bluetooth (com.android.bluetooth)\" for BLE hooks. Never enable any target app! All per-UID isolation happens seamlessly at the system layer.</string>
 
     <string name="help_sec6_title">6. Floating HUD &amp; Notification Controls</string>
     <string name="help_sec6_b1_head">Smart Auto-Hide (Appears in Background)</string>
@@ -294,4 +304,106 @@
     <string name="update_btn_download_zip_fmt">Direct Download Module ZIP%1$s</string>
     <string name="update_btn_go">Update</string>
     <string name="update_btn_skip_version">Skip this version</string>
+
+    <!-- RF Signal Simulation (v0.7.0) -->
+    <string name="settings_rf_section">RF Signal Simulation</string>
+    <string name="settings_rf_btn">Configure Cell / Wi-Fi / BLE</string>
+    <string name="settings_rf_hint">Geo-aware 4G/5G virtual towers, regional Wi-Fi AP lists, country codes, and custom BLE / iBeacon injection.</string>
+    <string name="rf_title">RF Signal Simulation</string>
+    <string name="rf_telemetry_fmt">%1$s · %2$03d-%3$02d · Cell %4$d · Wi-Fi %5$d · BLE %6$d</string>
+    <string name="rf_serving_fmt">Serving: %1$s</string>
+    <string name="rf_serving_none">No active virtual serving cell yet</string>
+    <string name="rf_bt_ready">BT B✓</string>
+    <string name="rf_bt_optional">BT B- (Optional)</string>
+    <string name="rf_tab_general">General</string>
+    <string name="rf_tab_cell">Cell (%1$d)</string>
+    <string name="rf_tab_wifi">Wi-Fi (%1$d)</string>
+    <string name="rf_tab_ble">BLE (%1$d)</string>
+    <string name="rf_toggle_cell_auto_title">Auto Virtual Cell Towers</string>
+    <string name="rf_toggle_cell_auto_sub">Synthesize geo-matched 4G/5G towers with smooth route handovers</string>
+    <string name="rf_toggle_prefer_5g_title">Prefer 5G NR</string>
+    <string name="rf_toggle_prefer_5g_sub">Synthesize 5G NR (SA) serving cell alongside LTE neighbors</string>
+    <string name="rf_toggle_wifi_auto_title">Auto Virtual Wi-Fi AP List</string>
+    <string name="rf_toggle_wifi_auto_sub">Synthesize regional SSID/OUI/channels &amp; 802.11d country code</string>
+    <string name="rf_toggle_wifi_conn_title">Spoof Connected Wi-Fi</string>
+    <string name="rf_toggle_wifi_conn_sub">Report the pinned or primary virtual AP as active WifiInfo</string>
+    <string name="rf_toggle_ble_ambient_title">Ambient Virtual BLE Devices</string>
+    <string name="rf_toggle_ble_ambient_sub">Mix realistic ambient BLE peripherals alongside pinned beacons</string>
+    <string name="rf_toggle_sim_country_title">Local SIM Country Mode</string>
+    <string name="rf_toggle_sim_country_sub">Also spoof SIM country &amp; operator ISO (off = natural roaming mode)</string>
+    <string name="rf_carrier_section">Carrier &amp; Region</string>
+    <string name="rf_carrier_auto">Auto (Geo)</string>
+    <string name="rf_carrier_custom">Custom</string>
+    <string name="rf_field_mcc">MCC</string>
+    <string name="rf_field_mnc">MNC</string>
+    <string name="rf_field_mnc_digits">MNC Digits (2/3)</string>
+    <string name="rf_field_country_iso">Country ISO</string>
+    <string name="rf_field_carrier_alpha">Operator Name</string>
+    <string name="rf_opencellid_section">Optional OpenCelliD Tower Lookup</string>
+    <string name="rf_opencellid_hint">Enter your own free OpenCelliD key to manually fetch real towers near the map crosshair (never queried automatically).</string>
+    <string name="rf_opencellid_token_label">OpenCelliD API Key (optional)</string>
+    <string name="rf_opencellid_btn_fetch">Fetch Real Towers at Map Pin</string>
+    <string name="rf_opencellid_fetching">Querying OpenCelliD…</string>
+    <string name="rf_opencellid_need_token">Enter your OpenCelliD API key first</string>
+    <string name="rf_opencellid_ok_fmt">Fetched %1$d real tower(s) from OpenCelliD</string>
+    <string name="rf_opencellid_empty">No OpenCelliD towers found near map crosshair</string>
+    <string name="rf_opencellid_err_fmt">OpenCelliD lookup failed: %1$s</string>
+    <string name="rf_btn_add">Add</string>
+    <string name="rf_btn_import_live">Import Nearby Scan</string>
+    <string name="rf_btn_scanning">Scanning…</string>
+    <string name="rf_btn_export_json">Export JSON</string>
+    <string name="rf_btn_import_json">Import JSON</string>
+    <string name="rf_btn_apply_sync">Apply &amp; Sync</string>
+    <string name="rf_btn_clear_tab">Clear</string>
+    <string name="rf_pin_mode_follow">Always Follow</string>
+    <string name="rf_pin_mode_map">Pin to Map Center</string>
+    <string name="rf_pin_badge_follow">Follow</string>
+    <string name="rf_pin_badge_fixed">Pinned</string>
+    <string name="rf_empty_cells">No pinned cells yet. Auto synthesis is active, or tap Add / Import Nearby Scan / OpenCelliD to pin towers.</string>
+    <string name="rf_empty_wifis">No pinned Wi-Fi APs yet. Auto regional AP synthesis is active, or tap Add / Import Nearby Scan to pin routers.</string>
+    <string name="rf_empty_bles">No pinned BLE / iBeacons yet. Tap Add to configure an iBeacon or Import Nearby Scan to capture real beacons.</string>
+    <string name="rf_limit_reached_fmt">Maximum limit reached (%1$d)</string>
+    <string name="rf_edit_cell_title">Pinned Cell Tower</string>
+    <string name="rf_cell_rat_lte">4G LTE</string>
+    <string name="rf_cell_rat_nr">5G NR</string>
+    <string name="rf_field_tac">TAC</string>
+    <string name="rf_field_ci">CI / NCI</string>
+    <string name="rf_field_pci">PCI</string>
+    <string name="rf_field_arfcn">EARFCN / NRARFCN</string>
+    <string name="rf_field_band">Band</string>
+    <string name="rf_field_rsrp">RSRP (dBm)</string>
+    <string name="rf_edit_wifi_title">Pinned Wi-Fi AP</string>
+    <string name="rf_field_ssid">SSID</string>
+    <string name="rf_field_bssid">BSSID (MAC)</string>
+    <string name="rf_field_freq_mhz">Frequency (MHz)</string>
+    <string name="rf_field_rssi">RSSI (dBm)</string>
+    <string name="rf_field_wifi_connected">Mark as Connected AP</string>
+    <string name="rf_badge_connected_ap">Connected</string>
+    <string name="rf_edit_ble_title">Pinned BLE / iBeacon</string>
+    <string name="rf_ble_type_ibeacon">iBeacon</string>
+    <string name="rf_ble_type_generic">Generic BLE</string>
+    <string name="rf_field_ble_name">Device Name</string>
+    <string name="rf_field_ble_mac">BLE MAC Address</string>
+    <string name="rf_field_ble_uuid">Proximity UUID (32 hex)</string>
+    <string name="rf_field_ble_major">Major</string>
+    <string name="rf_field_ble_minor">Minor</string>
+    <string name="rf_field_ble_tx_pwr">Tx Power (dBm)</string>
+    <string name="rf_scan_imported_fmt">Imported %1$d nearby signal(s)</string>
+    <string name="rf_scan_empty">No nearby signals found; verify radio &amp; Location are enabled</string>
+    <string name="rf_scan_perm_denied">Required Location / Nearby Devices permission was denied</string>
+    <string name="rf_scan_bt_off">Bluetooth is off; enable Bluetooth to scan nearby BLE beacons</string>
+    <string name="rf_json_copied">RF config JSON copied to clipboard</string>
+    <string name="rf_json_import_title">Import RF Config (JSON)</string>
+    <string name="rf_json_import_hint">Paste exported RF config JSON to replace your pinned Cell / Wi-Fi / BLE settings.</string>
+    <string name="rf_json_import_ok">RF config JSON imported &amp; applied</string>
+    <string name="rf_json_import_err_fmt">Invalid RF JSON: %1$s</string>
+    <string name="rf_sync_ok">RF configuration synced to engine</string>
+    <string name="rf_sync_offline_saved">Saved locally; will sync automatically when daemon reconnects</string>
+    <string name="rf_clipboard_label">Kuroko Teleport RF Config</string>
+
+    <!-- Diagnostics Bluetooth Check -->
+    <string name="diag_check_bt_title">Bluetooth / BLE Hook (B)</string>
+    <string name="diag_check_bt_ok">com.android.bluetooth hook active (B✓)</string>
+    <string name="diag_check_bt_unused">Optional (no target app uses BLE policy)</string>
+    <string name="diag_check_bt_missing">Target app(s) enabled BLE policy, but B- is inactive. Enable Bluetooth (com.android.bluetooth) in LSPosed and reboot.</string>
 </resources>

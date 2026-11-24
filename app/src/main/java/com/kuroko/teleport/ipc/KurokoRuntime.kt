@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.Process
 import com.kuroko.teleport.R
 import com.kuroko.teleport.diag.AppLogBuffer
+import com.kuroko.teleport.rf.RfConfig
+import com.kuroko.teleport.rf.RfConfigStore
 import com.kuroko.teleport.ui.AppLocaleManager
 import com.kuroko.teleport.ui.CustomSpeedPreset
 import com.kuroko.teleport.ui.RouteStore
@@ -66,6 +68,9 @@ object KurokoRuntime {
     private var initialTargetsSynced = false
 
     @Volatile
+    private var rfConfigSynced = false
+
+    @Volatile
     private var overlayExpanded = false
 
     @Volatile
@@ -103,6 +108,10 @@ object KurokoRuntime {
 
     private val _appLanguageTag = MutableStateFlow(AppLocaleManager.TAG_AUTO)
     val appLanguageTag: StateFlow<String> = _appLanguageTag.asStateFlow()
+
+    private val _rfConfig = MutableStateFlow(RfConfig())
+    val rfConfig: StateFlow<RfConfig> = _rfConfig.asStateFlow()
+    private val rfSyncMutex = Mutex()
 
     // Temporary in-app sensor self-test session state (never modifies persisted RouteStore targets!)
     private val selfTestMutex = Mutex()
@@ -154,6 +163,7 @@ object KurokoRuntime {
                 yFraction = s.overlayYFraction
             )
             _hasDraftRoute.value = d.draftWaypoints.size >= 2
+            _rfConfig.value = RfConfigStore(ctx).loadConfig()
             initialized = true
         }
     }
@@ -236,6 +246,43 @@ object KurokoRuntime {
 
     fun refreshNow() {
         scope.launch { pollOnce() }
+    }
+
+    fun invalidateRfSync() {
+        rfConfigSynced = false
+    }
+
+    suspend fun saveAndSyncRfConfig(context: Context, config: RfConfig): Result<Unit> {
+        init(context)
+        val store = RfConfigStore(context.applicationContext)
+        store.saveConfig(config)
+        val clean = store.loadConfig()
+        _rfConfig.value = clean
+        rfConfigSynced = false
+        val pushRes = pushRfConfigToDaemon(clean)
+        if (pushRes.isSuccess) {
+            rfConfigSynced = true
+            AppLogBuffer.i(
+                "RF",
+                "Synced RF config (flags=0x${clean.toRfFlags().toString(16)}, cells=${clean.pinnedCells.size}, wifis=${clean.pinnedWifis.size}, beacons=${clean.pinnedBeacons.size})"
+            )
+        } else {
+            AppLogBuffer.w("RF", "Saved RF config locally; daemon sync pending: ${pushRes.exceptionOrNull()?.message ?: "offline"}")
+        }
+        pollOnce()
+        return pushRes
+    }
+
+    private suspend fun pushRfConfigToDaemon(config: RfConfig): Result<Unit> = rfSyncMutex.withLock {
+        val cRes = daemon.setRfConfig(config)
+        if (cRes.isFailure) return@withLock Result.failure(cRes.exceptionOrNull() ?: IllegalStateException("SET_RF_CONFIG failed"))
+        val cellRes = daemon.setRfCells(config.pinnedCells)
+        if (cellRes.isFailure) return@withLock Result.failure(cellRes.exceptionOrNull() ?: IllegalStateException("SET_RF_CELLS failed"))
+        val wifiRes = daemon.setRfWifis(config.pinnedWifis)
+        if (wifiRes.isFailure) return@withLock Result.failure(wifiRes.exceptionOrNull() ?: IllegalStateException("SET_RF_WIFIS failed"))
+        val bleRes = daemon.setRfBeacons(config.pinnedBeacons)
+        if (bleRes.isFailure) return@withLock Result.failure(bleRes.exceptionOrNull() ?: IllegalStateException("SET_RF_BEACONS failed"))
+        Result.success(Unit)
     }
 
     fun syncDraftRouteState(hasRoute: Boolean) {
@@ -600,7 +647,7 @@ object KurokoRuntime {
             val compat = evaluateVersionCompat(true, st, locCtx)
             _versionCompat.value = compat
 
-            val hooksSig = "L=${st.locShm},P=${st.phoneShm},S=${st.sensorShm}"
+            val hooksSig = "L=${st.locShm},P=${st.phoneShm},S=${st.sensorShm},B=${st.btShm}"
             if (lastLoggedConnected != true) {
                 lastLoggedConnected = true
                 lastLoggedHooksSignature = hooksSig
@@ -634,7 +681,20 @@ object KurokoRuntime {
                     }
                 }
             }
+
+            if (!rfConfigSynced && st.protoVer >= 3) {
+                val cfg = _rfConfig.value
+                val rfRes = pushRfConfigToDaemon(cfg)
+                if (rfRes.isSuccess) {
+                    rfConfigSynced = true
+                    AppLogBuffer.i(
+                        "RF",
+                        "Auto-synced RF config to daemon (flags=0x${cfg.toRfFlags().toString(16)}, cells=${cfg.pinnedCells.size}, wifis=${cfg.pinnedWifis.size}, beacons=${cfg.pinnedBeacons.size})"
+                    )
+                }
+            }
         } else {
+            rfConfigSynced = false
             val fallbackMsg = locCtx?.getString(R.string.daemon_unresponsive) ?: "Daemon unresponsive"
             val nextSnap = _snapshot.value.copy(
                 connected = false,

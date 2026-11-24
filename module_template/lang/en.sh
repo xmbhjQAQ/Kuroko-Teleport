@@ -1,5 +1,5 @@
 # Kuroko Teleport installer strings — English (default fallback)
-MOD_DESC='Per-app system-side GPS, pedometer & IMU simulation engine for Android (zero target app injection)'
+MOD_DESC='Per-app system-side GPS, pedometer/IMU & RF (Cell/Wi-Fi/BLE) simulation engine for Android (zero target app injection)'
 MSG_ERR_ABI='! Kuroko Teleport requires arm64-v8a (detected ARCH=%s ABI=%s)'
 MSG_INSTALLING='- Installing Kuroko Teleport %s (code=%s, arm64-v8a, SDK=%s)'
 MSG_APK_FOUND='- Bundled Controller APK: %s v%s (%s, %s bytes)'
@@ -12,6 +12,6 @@ MSG_APK_SIG_WARN_3='! Please back up your routes and install a matching-signatur
 MSG_APK_DEFERRED_1='- PackageManager unavailable right now (%s)'
 MSG_APK_DEFERRED_2='- Staged APK to %s; service.sh will install automatically after boot'
 MSG_READY='- Ready: bin/kuroko_daemon & zygisk/arm64-v8a.so (%s)'
-MSG_LSPOSED_HINT='- In LSPosed, enable ONLY: System Framework (android) & Phone Services (com.android.phone)'
+MSG_LSPOSED_HINT='- In LSPosed, enable ONLY: System Framework (android), Phone Services (com.android.phone), and optionally Bluetooth (com.android.bluetooth) for BLE'
 MSG_BOOTGUARD_HINT='- Anti-bootloop boot-guard is active (auto-disables after 2 failed boots)'
 MSG_REBOOT_HINT='- Reboot to activate all components in sync'

@@ -28,6 +28,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
+import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -92,6 +93,7 @@ fun SettingsDialog(
     locShmOk: Boolean,
     phoneShmOk: Boolean,
     sensorShmOk: Boolean,
+    btShmOk: Boolean = false,
     sensorDiag: String,
     simStatus: SimStatus,
     versionCompat: VersionCompatInfo,
@@ -113,6 +115,7 @@ fun SettingsDialog(
     onResetSteps: () -> Unit,
     onResetSpeedPresets: () -> Unit,
     onOpenHelp: () -> Unit,
+    onOpenRfConfig: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     autoCheckUpdate: Boolean,
     updateCheckBusy: Boolean,
@@ -337,6 +340,23 @@ fun SettingsDialog(
                                         daemonConnected -> NeuColors.AmberDeep
                                         else -> NeuColors.InkMuted
                                     },
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                NeuLedDot(
+                                    color = NeuColors.Cobalt,
+                                    lit = daemonConnected && btShmOk,
+                                    size = 5.5.dp
+                                )
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    text = if (daemonConnected && btShmOk) "B✓" else "B-",
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (daemonConnected && btShmOk) NeuColors.InkPrimary else NeuColors.InkMuted,
                                     maxLines = 1,
                                     softWrap = false
                                 )
@@ -772,6 +792,53 @@ fun SettingsDialog(
                                     SelfTestMetricRow(stringResource(R.string.selftest_metric_native_diag), diagText)
                                 }
                             }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = NeuColors.InsetDark.copy(alpha = 0.45f))
+
+                Text(
+                    text = stringResource(R.string.settings_rf_section),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = NeuColors.InkPrimary
+                )
+
+                NeuCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 14.dp, elevation = 3.dp) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 11.dp, vertical = 9.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.settings_rf_hint),
+                            fontSize = 10.5.sp,
+                            lineHeight = 14.sp,
+                            color = NeuColors.InkSecondary
+                        )
+                        NeuButton(
+                            onClick = {
+                                onDismiss()
+                                onOpenRfConfig()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            tone = NeuTone.COBALT,
+                            cornerRadius = 11.dp,
+                            contentPadding = PaddingValues(vertical = 9.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CellTower,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(R.string.settings_rf_btn),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }

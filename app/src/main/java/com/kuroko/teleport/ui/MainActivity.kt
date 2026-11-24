@@ -229,6 +229,7 @@ private fun KurokoControllerScreen() {
     val overlayPrefs by KurokoRuntime.overlayPrefs.collectAsState()
     val overlayRunning by KurokoRuntime.overlayRunning.collectAsState()
     val appLanguageTag by KurokoRuntime.appLanguageTag.collectAsState()
+    val rfConfig by KurokoRuntime.rfConfig.collectAsState()
 
     // 0 = 定点模拟 (Static), 1 = 运动模拟 (Dynamic)
     var activeTab by remember { mutableIntStateOf(initialSettings.activeTab) }
@@ -283,6 +284,7 @@ private fun KurokoControllerScreen() {
     var showPointsSheet by remember { mutableStateOf(false) }
     var showRoutesSheet by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var showRfConfigDialog by remember { mutableStateOf(false) }
     var showDiagnosticsDialog by remember { mutableStateOf(false) }
     var showHelpSheet by remember { mutableStateOf(false) }
     var showTargetDistDialog by remember { mutableStateOf(false) }
@@ -2504,6 +2506,7 @@ private fun KurokoControllerScreen() {
     if (showTargetSheet) {
         TargetAppSheet(
             initialTargets = targetApps,
+            btShmOk = daemonStatus.btShm,
             onDismiss = { showTargetSheet = false },
             onApplyTargets = { updated ->
                 targetApps = updated
@@ -2518,7 +2521,8 @@ private fun KurokoControllerScreen() {
                         )
                     )
                 }
-            }
+            },
+            onOpenRfConfig = { showRfConfigDialog = true }
         )
     }
 
@@ -2695,6 +2699,7 @@ private fun KurokoControllerScreen() {
             locShmOk = daemonStatus.locShm,
             phoneShmOk = daemonStatus.phoneShm,
             sensorShmOk = daemonStatus.sensorShm,
+            btShmOk = daemonStatus.btShm,
             sensorDiag = daemonStatus.sensorDiag,
             simStatus = daemonStatus,
             versionCompat = versionCompat,
@@ -2729,6 +2734,7 @@ private fun KurokoControllerScreen() {
             onReconnectDaemon = {
                 scope.launch {
                     daemon.resetConnection()
+                    KurokoRuntime.invalidateRfSync()
                     daemon.ping()
                         .onSuccess {
                             KurokoRuntime.refreshNow()
@@ -2764,6 +2770,7 @@ private fun KurokoControllerScreen() {
                 showToast(context.getString(R.string.main_toast_presets_restored))
             },
             onOpenHelp = { showHelpSheet = true },
+            onOpenRfConfig = { showRfConfigDialog = true },
             onOpenDiagnostics = { showDiagnosticsDialog = true },
             autoCheckUpdate = autoCheckUpdate,
             updateCheckBusy = updateCheckBusy,
@@ -2830,6 +2837,26 @@ private fun KurokoControllerScreen() {
         )
     }
 
+    if (showRfConfigDialog) {
+        RfConfigDialog(
+            initialConfig = rfConfig,
+            daemonSnap = daemonSnap,
+            mapCenterWgs84 = mapController.getCenterWgs84() ?: centerWgs84,
+            onDismiss = { showRfConfigDialog = false },
+            onSaveAndSync = { updated ->
+                scope.launch {
+                    val res = KurokoRuntime.saveAndSyncRfConfig(context, updated)
+                    showToast(
+                        context.getString(
+                            if (res.isSuccess) R.string.rf_sync_ok else R.string.rf_sync_offline_saved
+                        )
+                    )
+                }
+            },
+            onNotify = { msg -> showToast(msg) }
+        )
+    }
+
     if (showDiagnosticsDialog) {
         DiagnosticsDialog(
             daemonSnap = daemonSnap,
@@ -2840,6 +2867,7 @@ private fun KurokoControllerScreen() {
             appLangTag = appLanguageTag,
             tiandituToken = settings.tiandituToken,
             amapWebKey = settings.amapWebKey,
+            openCellIdToken = rfConfig.openCellIdToken,
             onDismiss = { showDiagnosticsDialog = false },
             onNotify = { msg -> showToast(msg) }
         )

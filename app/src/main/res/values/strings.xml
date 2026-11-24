@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Kuroko Teleport</string>
-    <string name="xposed_description">Kuroko Teleport system-level GPS &amp; gait/IMU simulation engine (select System Framework &amp; Phone Services only; zero target app injection)</string>
+    <string name="xposed_description">Kuroko Teleport system-level GPS, gait/IMU &amp; RF (Cell/Wi-Fi/BLE) simulation engine (select System Framework, Phone Services &amp; optionally Bluetooth; zero target app injection)</string>
 
     <!-- Common -->
     <string name="common_ok">OK</string>
     <string name="common_cancel">Cancel</string>
     <string name="common_save">Save</string>
     <string name="common_close">Close</string>
+    <string name="common_edit">Edit</string>
+    <string name="common_delete">Delete</string>
     <string name="common_stop">Stop</string>
     <string name="common_pause">Pause</string>
     <string name="common_resume">Resume</string>

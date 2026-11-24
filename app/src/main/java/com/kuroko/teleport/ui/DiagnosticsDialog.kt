@@ -103,6 +103,7 @@ fun DiagnosticsDialog(
     appLangTag: String,
     tiandituToken: String,
     amapWebKey: String,
+    openCellIdToken: String = "",
     onDismiss: () -> Unit,
     onNotify: (String) -> Unit
 ) {
@@ -127,7 +128,7 @@ fun DiagnosticsDialog(
             overlayPrefs = overlayPrefs,
             savedTargets = savedTargets,
             appLangTag = appLangTag,
-            apiKeysToScrub = listOf(tiandituToken, amapWebKey)
+            apiKeysToScrub = listOf(tiandituToken, amapWebKey, openCellIdToken)
         )
         snapshot = collected
         collecting = false

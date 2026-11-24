@@ -110,6 +110,7 @@ object DiagnosticCollector {
     private val URL_KEY_REGEX = Regex("""(?i)([?&](?:tk|key|apikey|api_key)=)[^&\s'"]+""")
     private val SET_POINT_REGEX = Regex("""(?i)\bSET_POINT\b[^\r\n]*""")
     private val SET_ROUTE_REGEX = Regex("""(?i)\bSET_ROUTE\b[^\r\n]*""")
+    private val SET_RF_PIN_REGEX = Regex("""(?i)\bSET_RF_(?:CELLS|WIFIS|BEACONS)\b[^\r\n]*""")
     private val NMEA_REGEX = Regex("""\x24G[PNLA][A-Z]{3},[^\r\n]*""")
     private val KEYED_COORD_REGEX = Regex(
         """(?i)\b(lat|lon|lng|latitude|longitude)\s*([=:])\s*-?\d{1,3}\.\d{3,}"""
@@ -128,7 +129,7 @@ object DiagnosticCollector {
         """(?i)(?:proc_perfmgr|hal_perf|vendor_hal_perf|kgsl|perfmgr|gpu)"""
     )
     private val AVC_ENGINE_SCONTEXT_REGEX = Regex(
-        """(?i)\bscontext=u:r:(?:system_server|zygote|radio|su|magisk|init|kuroko)[a-z0-9_]*:"""
+        """(?i)\bscontext=u:r:(?:system_server|zygote|radio|bluetooth|su|magisk|init|kuroko)[a-z0-9_]*:"""
     )
     private val AVC_ENGINE_SUBJECT_REGEX = Regex(
         """(?i)(?:kuroko|memfd|tmpfs|adb_data_file|sensorservice|binder|location|unix_stream_socket)"""
@@ -494,7 +495,32 @@ echo "===END==="
             )
         }
 
-        // 5. SELinux Policy
+        // 5. Optional LSPosed Bluetooth Hook (B)
+        val anyBleTarget = snapshot.savedTargets.any { t ->
+            (t.policyFlags and (KurokoProtocol.POLICY_HIDE_BLE or KurokoProtocol.POLICY_SPOOF_BLE)) != 0
+        }
+        val btCheck = when {
+            connected && st.btShm -> HealthCheckItem(
+                id = "bluetooth",
+                title = ctx.getString(R.string.diag_check_bt_title),
+                status = HealthStatus.PASS,
+                detail = ctx.getString(R.string.diag_check_bt_ok)
+            )
+            !anyBleTarget -> HealthCheckItem(
+                id = "bluetooth",
+                title = ctx.getString(R.string.diag_check_bt_title),
+                status = HealthStatus.PASS,
+                detail = ctx.getString(R.string.diag_check_bt_unused)
+            )
+            else -> HealthCheckItem(
+                id = "bluetooth",
+                title = ctx.getString(R.string.diag_check_bt_title),
+                status = HealthStatus.WARN,
+                detail = ctx.getString(R.string.diag_check_bt_missing)
+            )
+        }
+
+        // 6. SELinux Policy
         val selinuxCheck = if (snapshot.selinuxAvcCount == 0) {
             HealthCheckItem(
                 id = "selinux",
@@ -511,7 +537,7 @@ echo "===END==="
             )
         }
 
-        return listOf(daemonCheck, versionCheck, xposedCheck, sensorCheck, selinuxCheck)
+        return listOf(daemonCheck, versionCheck, xposedCheck, sensorCheck, btCheck, selinuxCheck)
     }
 
     fun buildPackageAliasMap(savedTargets: List<SavedTargetApp>): Map<String, String> {
@@ -597,7 +623,7 @@ echo "===END==="
             "- **4-Tier Lock**: state=`${snapshot.versionCompat.state}` · " +
                 "App(`#${snapshot.appVersionCode}`) / Hook(`#${st.xposedCode}`) / " +
                 "Daemon(`v${st.modVer.ifBlank { "?" }} #${st.modCode}`) / Sensor(`#${st.zygiskCode}`) · " +
-                "SHM(`L=${if (st.locShm) "OK" else "NO"}, P=${if (st.phoneShm) "OK" else "NO"}, S=${if (st.sensorShm) "OK" else "NO"}`)"
+                "SHM(`L=${if (st.locShm) "OK" else "NO"}, P=${if (st.phoneShm) "OK" else "NO"}, S=${if (st.sensorShm) "OK" else "NO"}, B=${if (st.btShm) "OK" else "OPT"}`)"
         )
         val diagEffective = st.sensorDiag.ifBlank { "none" }
         val hookSegment = if (snapshot.lsposedSensorHook.isNotBlank()) {
@@ -608,6 +634,11 @@ echo "===END==="
         sb.appendLine(
             "- **Sensor Hook**: diag=`$diagEffective`$hookSegment · " +
                 "libsensorservice=`${snapshot.sensorServiceInstances} instance(s) (${snapshot.sensorServiceVmaCount} VMAs)`"
+        )
+        sb.appendLine(
+            "- **RF Synthesis**: country=`${st.rfCountry.ifBlank { "none" }}` · " +
+                "plmn=`${st.rfMcc}-${st.rfMnc}` · cells=`${st.rfCells}` · wifis=`${st.rfWifis}` · bles=`${st.rfBles}` · " +
+                "serving=`${st.rfServing.ifBlank { "none" }}`"
         )
         sb.appendLine(
             "- **SELinux / Targets**: avc_denials=`${snapshot.selinuxAvcCount}` · " +
@@ -717,6 +748,7 @@ echo "===END==="
                 put("locShm", st.locShm)
                 put("phoneShm", st.phoneShm)
                 put("sensorShm", st.sensorShm)
+                put("btShm", st.btShm)
                 put("modVer", st.modVer)
                 put("modCode", st.modCode)
                 put("protoVer", st.protoVer)
@@ -725,6 +757,13 @@ echo "===END==="
                 put("xposedCode", st.xposedCode)
                 put("zygiskCode", st.zygiskCode)
                 put("sensorDiag", st.sensorDiag)
+                put("rfCountry", st.rfCountry)
+                put("rfMcc", st.rfMcc)
+                put("rfMnc", st.rfMnc)
+                put("rfCells", st.rfCells)
+                put("rfWifis", st.rfWifis)
+                put("rfBles", st.rfBles)
+                put("rfServing", st.rfServing)
                 if (snapshot.lsposedSensorHook.isNotBlank()) {
                     put("lsposedSensorHook", snapshot.lsposedSensorHook)
                 }
@@ -894,6 +933,7 @@ echo "===END==="
         out = URL_KEY_REGEX.replace(out, "\$1<REDACTED_KEY>")
         out = SET_POINT_REGEX.replace(out, "SET_POINT <REDACTED_COORD>")
         out = SET_ROUTE_REGEX.replace(out, "SET_ROUTE <REDACTED_COORD>")
+        out = SET_RF_PIN_REGEX.replace(out, "SET_RF <REDACTED_COORD>")
         out = NMEA_REGEX.replace(out, "<REDACTED_COORD>")
         out = KEYED_COORD_REGEX.replace(out, "\$1\$2<REDACTED_COORD>")
         out = BARE_COORD_PAIR_REGEX.replace(out, "<REDACTED_COORD>")

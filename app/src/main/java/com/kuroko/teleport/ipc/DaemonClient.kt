@@ -5,6 +5,11 @@ import androidx.annotation.StringRes
 import com.kuroko.teleport.BuildConfig
 import com.kuroko.teleport.R
 import com.kuroko.teleport.diag.AppLogBuffer
+import com.kuroko.teleport.rf.PinnedBleBeacon
+import com.kuroko.teleport.rf.PinnedCell
+import com.kuroko.teleport.rf.PinnedWifiAp
+import com.kuroko.teleport.rf.RfConfig
+import com.kuroko.teleport.rf.RfFormatting
 import com.kuroko.teleport.ui.AppLocaleManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -49,23 +54,47 @@ object KurokoProtocol {
     const val CARRY_HAND_SWING = 0
     const val CARRY_POCKET = 1
 
-    // Per-target UID policy bitmask
+    // Per-target UID policy bitmask (mirrored 1:1 from common/include/kuroko_shm.h)
     const val POLICY_LOCATION = 1 shl 0
     const val POLICY_STEPS = 1 shl 1
     const val POLICY_IMU = 1 shl 2
     const val POLICY_HIDE_WIFI = 1 shl 3
     const val POLICY_HIDE_CELL = 1 shl 4
     const val POLICY_SUPPRESS_MEAS = 1 shl 5
+    const val POLICY_SPOOF_WIFI = 1 shl 6   // Overrides HIDE_WIFI
+    const val POLICY_SPOOF_CELL = 1 shl 7   // Overrides HIDE_CELL
+    const val POLICY_HIDE_BLE = 1 shl 8
+    const val POLICY_SPOOF_BLE = 1 shl 9    // Overrides HIDE_BLE
 
-    /** Cross-city strict policy: location + steps + IMU + hide Wi-Fi + hide cell + suppress raw GNSS measurements */
+    /** Full spoof preset: location + steps + IMU + spoof Wi-Fi + spoof cell + spoof BLE + suppress raw GNSS measurements */
+    const val POLICY_ALL_SPOOF =
+        POLICY_LOCATION or POLICY_STEPS or POLICY_IMU or
+            POLICY_SPOOF_WIFI or POLICY_SPOOF_CELL or POLICY_SPOOF_BLE or
+            POLICY_SUPPRESS_MEAS
+
+    /** Cross-city strict policy: location + steps + IMU + hide Wi-Fi + hide cell + hide BLE + suppress raw GNSS measurements */
     const val POLICY_ALL_STRICT =
         POLICY_LOCATION or POLICY_STEPS or POLICY_IMU or
-            POLICY_HIDE_WIFI or POLICY_HIDE_CELL or POLICY_SUPPRESS_MEAS
+            POLICY_HIDE_WIFI or POLICY_HIDE_CELL or POLICY_HIDE_BLE or
+            POLICY_SUPPRESS_MEAS
 
     /** Local outdoor policy: location + steps + IMU + hide Wi-Fi + suppress raw GNSS measurements (keeps cell towers) */
     const val POLICY_LOCAL_OUTDOOR =
         POLICY_LOCATION or POLICY_STEPS or POLICY_IMU or
             POLICY_HIDE_WIFI or POLICY_SUPPRESS_MEAS
+
+    // Global RF synthesis flags (KUROKO_RF_FLAG_*)
+    const val RF_FLAG_CELL_AUTO = 1 shl 0
+    const val RF_FLAG_WIFI_AUTO = 1 shl 1
+    const val RF_FLAG_WIFI_SPOOF_CONN = 1 shl 2
+    const val RF_FLAG_BLE_AMBIENT = 1 shl 3
+    const val RF_FLAG_SPOOF_SIM_COUNTRY = 1 shl 4
+    const val RF_FLAG_CELL_PREFER_5G = 1 shl 5
+
+    const val MAX_PINNED_CELLS = 4
+    const val MAX_PINNED_WIFIS = 8
+    const val MAX_PINNED_BEACONS = 8
+    const val PIN_FOLLOW_SENTINEL = 999.0
 }
 
 data class DaemonTargetSpec(
@@ -106,6 +135,7 @@ data class SimStatus(
     val locShm: Boolean = false,
     val phoneShm: Boolean = false,
     val sensorShm: Boolean = false,
+    val btShm: Boolean = false,
     val sensorDiag: String = "",
     val modVer: String = "",
     val modCode: Int = 0,
@@ -113,7 +143,14 @@ data class SimStatus(
     val shmVer: Int = 0,
     val minAppCode: Int = 0,
     val xposedCode: Int = 0,
-    val zygiskCode: Int = 0
+    val zygiskCode: Int = 0,
+    val rfCountry: String = "",
+    val rfMcc: Int = 0,
+    val rfMnc: Int = 0,
+    val rfCells: Int = 0,
+    val rfWifis: Int = 0,
+    val rfBles: Int = 0,
+    val rfServing: String = ""
 )
 
 typealias DaemonStatus = SimStatus
@@ -410,6 +447,7 @@ class DaemonClient {
             locShm = j.optInt("loc_shm", 0) != 0,
             phoneShm = j.optInt("phone_shm", 0) != 0,
             sensorShm = j.optInt("sensor_shm", 0) != 0,
+            btShm = j.optInt("bt_shm", 0) != 0,
             sensorDiag = j.optString("sensor_diag", ""),
             modVer = j.optString("mod_ver", ""),
             modCode = j.optInt("mod_code", 0),
@@ -417,7 +455,14 @@ class DaemonClient {
             shmVer = j.optInt("shm_ver", 0),
             minAppCode = j.optInt("min_app_code", 0),
             xposedCode = j.optInt("xposed_code", 0),
-            zygiskCode = j.optInt("zygisk_code", 0)
+            zygiskCode = j.optInt("zygisk_code", 0),
+            rfCountry = j.optString("rf_country", ""),
+            rfMcc = j.optInt("rf_mcc", 0),
+            rfMnc = j.optInt("rf_mnc", 0),
+            rfCells = j.optInt("rf_cells", 0),
+            rfWifis = j.optInt("rf_wifis", 0),
+            rfBles = j.optInt("rf_bles", 0),
+            rfServing = j.optString("rf_serving", "")
         )
     }
 
@@ -503,6 +548,109 @@ class DaemonClient {
         }
         val normalized = if (trimmed.equals("auto", ignoreCase = true)) "auto" else trimmed
         return sendCommand("SET_LANG $normalized")
+    }
+
+    suspend fun setRfConfig(config: RfConfig): Result<String> {
+        val flags = config.toRfFlags()
+        val mcc = if (config.carrierAuto) 0 else config.carrierMcc.coerceIn(0, 999)
+        val mnc = if (config.carrierAuto) 0 else config.carrierMnc.coerceIn(0, 999)
+        val mncDigits = if (config.carrierMncDigits == 3) 3 else 2
+        val iso = if (config.carrierAuto) "AUTO" else RfFormatting.normalizeCountryIsoOrAuto(config.carrierCountryIso)
+        val alphaB64 = if (config.carrierAuto) "AUTO" else RfFormatting.alphaToBase64OrAuto(config.carrierAlpha)
+        val cmd = String.format(
+            Locale.US,
+            "SET_RF_CONFIG 0x%x %d %d %d %s %s",
+            flags,
+            mcc,
+            mnc,
+            mncDigits,
+            iso,
+            alphaB64
+        )
+        return sendCommand(cmd)
+    }
+
+    suspend fun setRfCells(cells: List<PinnedCell>): Result<String> {
+        val trimmed = cells.take(KurokoProtocol.MAX_PINNED_CELLS)
+        if (trimmed.isEmpty()) {
+            return sendCommand("SET_RF_CELLS NONE")
+        }
+        val spec = trimmed.joinToString(";") { c ->
+            val lat = if (c.followVirtual) KurokoProtocol.PIN_FOLLOW_SENTINEL else c.pinLat
+            val lon = if (c.followVirtual) KurokoProtocol.PIN_FOLLOW_SENTINEL else c.pinLon
+            String.format(
+                Locale.US,
+                "%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%.6f:%.6f",
+                if (c.rat == 2) 2 else 1,
+                c.mcc.coerceIn(1, 999),
+                c.mnc.coerceIn(0, 999),
+                if (c.mncDigits == 3) 3 else 2,
+                c.tac.coerceIn(0L, 16_777_215L),
+                c.ci.coerceAtLeast(0L),
+                c.pci.coerceIn(0, 1007),
+                c.arfcn.coerceAtLeast(0),
+                c.band.coerceIn(0, 512),
+                c.rsrpDbm.coerceIn(-140, -44),
+                lat,
+                lon
+            )
+        }
+        return sendCommand("SET_RF_CELLS $spec")
+    }
+
+    suspend fun setRfWifis(wifis: List<PinnedWifiAp>): Result<String> {
+        val trimmed = wifis.take(KurokoProtocol.MAX_PINNED_WIFIS)
+        if (trimmed.isEmpty()) {
+            return sendCommand("SET_RF_WIFIS NONE")
+        }
+        val spec = trimmed.joinToString(";") { w ->
+            val bssidHex12 = RfFormatting.macToHex12(w.bssid).lowercase(Locale.US)
+            val flags = if (w.isConnectedAp) 1 else 0
+            val lat = if (w.followVirtual) KurokoProtocol.PIN_FOLLOW_SENTINEL else w.pinLat
+            val lon = if (w.followVirtual) KurokoProtocol.PIN_FOLLOW_SENTINEL else w.pinLon
+            val ssidHex = RfFormatting.utf8ToHex(w.ssid.ifBlank { "WiFi-AP" }, 32)
+            String.format(
+                Locale.US,
+                "%s:%d:%d:%d:%.6f:%.6f:%s",
+                bssidHex12,
+                w.frequencyMhz.coerceIn(2412, 7125),
+                w.rssiDbm.coerceIn(-100, -25),
+                flags,
+                lat,
+                lon,
+                ssidHex
+            )
+        }
+        return sendCommand("SET_RF_WIFIS $spec")
+    }
+
+    suspend fun setRfBeacons(beacons: List<PinnedBleBeacon>): Result<String> {
+        val trimmed = beacons.take(KurokoProtocol.MAX_PINNED_BEACONS)
+        if (trimmed.isEmpty()) {
+            return sendCommand("SET_RF_BEACONS NONE")
+        }
+        val spec = trimmed.joinToString(";") { b ->
+            val macHex12 = RfFormatting.macToHex12(b.mac).lowercase(Locale.US)
+            val devType = if (b.deviceType == 1) 1 else 0
+            val uuidHex32 = RfFormatting.normalizeUuidHex32(b.uuidHex32).lowercase(Locale.US)
+            val lat = if (b.followVirtual) KurokoProtocol.PIN_FOLLOW_SENTINEL else b.pinLat
+            val lon = if (b.followVirtual) KurokoProtocol.PIN_FOLLOW_SENTINEL else b.pinLon
+            val nameHex = RfFormatting.utf8ToHex(b.name, 23)
+            String.format(
+                Locale.US,
+                "%s:%d:%s:%d:%d:%d:%.6f:%.6f:%s",
+                macHex12,
+                devType,
+                uuidHex32,
+                b.major.coerceIn(0, 65535),
+                b.minor.coerceIn(0, 65535),
+                b.txPowerDbm.coerceIn(-100, 10),
+                lat,
+                lon,
+                nameHex
+            )
+        }
+        return sendCommand("SET_RF_BEACONS $spec")
     }
 
     /**

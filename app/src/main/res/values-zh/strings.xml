@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Kuroko Teleport</string>
-    <string name="xposed_description">Kuroko Teleport 系统级高精度位置与运动步态仿真引擎（仅需勾选系统框架与电话服务，目标 App 零注入）</string>
+    <string name="xposed_description">Kuroko Teleport 系统级高精度位置、步态/IMU 与射频（基站/Wi-Fi/BLE）仿真引擎（仅需勾选系统框架、电话服务及可选蓝牙服务，目标 App 零注入）</string>
 
     <!-- 通用 -->
     <string name="common_ok">确定</string>
     <string name="common_cancel">取消</string>
     <string name="common_save">保存</string>
     <string name="common_close">关闭</string>
+    <string name="common_edit">编辑</string>
+    <string name="common_delete">删除</string>
     <string name="common_stop">停止</string>
     <string name="common_pause">暂停</string>
     <string name="common_resume">继续</string>
