@@ -54,6 +54,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.gson.GsonBuilder
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import com.kuroko.teleport.R
 import com.kuroko.teleport.geo.CoordTransform
 import com.kuroko.teleport.geo.GeoPoint
@@ -405,7 +409,8 @@ class RouteStore(context: Context) {
             val staticPt = if (spObj != null) {
                 val lat = spObj.optDouble("lat", Double.NaN)
                 val lon = spObj.optDouble("lon", Double.NaN)
-                if (!lat.isNaN() && !lon.isNaN()) GeoPoint(lat, lon, spObj.optDouble("alt", 45.0)) else null
+                val alt = spObj.optDouble("alt", 45.0)
+                if (CoordTransform.isValidWgs84(lat, lon, alt)) GeoPoint(lat, lon, alt) else null
             } else {
                 null
             }
@@ -415,8 +420,9 @@ class RouteStore(context: Context) {
                 val p = ptsArr.optJSONObject(i) ?: continue
                 val lat = p.optDouble("lat", Double.NaN)
                 val lon = p.optDouble("lon", Double.NaN)
-                if (!lat.isNaN() && !lon.isNaN()) {
-                    pts.add(GeoPoint(lat, lon, p.optDouble("alt", 45.0)))
+                val alt = p.optDouble("alt", 45.0)
+                if (CoordTransform.isValidWgs84(lat, lon, alt)) {
+                    pts.add(GeoPoint(lat, lon, alt))
                 }
             }
             val rawLabel = o.optString("staticLabel", "")
@@ -518,35 +524,29 @@ class RouteStore(context: Context) {
 
     fun loadRoutes(): List<SavedRoute> {
         val raw = prefs.getString(KEY_ROUTES, null) ?: return emptyList()
-        return parseRoutesJsonArray(raw).getOrDefault(emptyList())
+        val fallbackName = localizedCtx().getString(R.string.route_unnamed)
+        return parseRoutesJson(raw, fallbackName = fallbackName, strictImport = false)
+            .getOrDefault(emptyList())
     }
 
     fun saveRoutes(routes: List<SavedRoute>) {
-        prefs.edit().putString(KEY_ROUTES, encodeRoutesJsonArray(routes).toString()).apply()
+        prefs.edit().putString(KEY_ROUTES, compactGson.toJson(encodeRoutesJsonArray(routes))).apply()
     }
 
     fun exportRoutesJson(routes: List<SavedRoute>): String {
-        return JSONObject().apply {
-            put("type", "kuroko_route")
-            put("version", 1)
-            put("routes", encodeRoutesJsonArray(routes))
-        }.toString(2)
+        return Companion.exportRoutesJson(routes)
     }
 
-    fun importRoutesJson(jsonText: String): Result<List<SavedRoute>> = runCatching {
+    fun importRoutesJson(jsonText: String): Result<List<SavedRoute>> {
         val uiCtx = localizedCtx()
-        val trimmed = jsonText.trim()
-        require(trimmed.isNotEmpty()) { uiCtx.getString(R.string.route_import_err_empty) }
-        val arr = if (trimmed.startsWith("[")) {
-            JSONArray(trimmed)
-        } else {
-            val root = JSONObject(trimmed)
-            root.optJSONArray("routes")
-                ?: throw IllegalArgumentException(uiCtx.getString(R.string.route_import_err_no_routes))
-        }
-        val parsed = parseRoutesFromArray(arr)
-        require(parsed.isNotEmpty()) { uiCtx.getString(R.string.route_import_err_invalid) }
-        parsed
+        return parseRoutesJson(
+            jsonText = jsonText,
+            fallbackName = uiCtx.getString(R.string.route_unnamed),
+            strictImport = true,
+            emptyErr = uiCtx.getString(R.string.route_import_err_empty),
+            noRoutesErr = uiCtx.getString(R.string.route_import_err_no_routes),
+            invalidErr = uiCtx.getString(R.string.route_import_err_invalid)
+        )
     }
 
     fun loadRawTargets(): List<SavedTargetApp> {
@@ -616,82 +616,6 @@ class RouteStore(context: Context) {
         prefs.edit().putString(KEY_TARGETS, arr.toString()).apply()
     }
 
-    private fun encodeRoutesJsonArray(routes: List<SavedRoute>): JSONArray {
-        val arr = JSONArray()
-        for (r in routes) {
-            val ptsArr = JSONArray()
-            for (p in r.waypoints) {
-                ptsArr.put(JSONObject().apply {
-                    put("lat", p.lat)
-                    put("lon", p.lon)
-                    put("alt", p.alt)
-                })
-            }
-            arr.put(
-                JSONObject().apply {
-                    put("id", r.id)
-                    put("name", r.name)
-                    put("waypoints", ptsArr)
-                    put("loop", r.loop)
-                    put("maxLaps", r.maxLaps)
-                    put("targetKm", r.targetDistanceKm.toDouble())
-                    put("speedMps", r.speedMps.toDouble())
-                    put("paceVar", r.paceVarRatio.toDouble())
-                    put("motionMode", r.motionMode)
-                    put("carryMode", r.carryMode)
-                    put("jitterM", r.jitterM.toDouble())
-                    put("updatedAt", r.updatedAtMs)
-                }
-            )
-        }
-        return arr
-    }
-
-    private fun parseRoutesJsonArray(raw: String): Result<List<SavedRoute>> = runCatching {
-        parseRoutesFromArray(JSONArray(raw))
-    }
-
-    private fun parseRoutesFromArray(arr: JSONArray): List<SavedRoute> {
-        val fallbackName = localizedCtx().getString(R.string.route_unnamed)
-        val list = mutableListOf<SavedRoute>()
-        for (i in 0 until arr.length()) {
-            val obj = arr.optJSONObject(i) ?: continue
-            val ptsArr = obj.optJSONArray("waypoints") ?: JSONArray()
-            val pts = mutableListOf<GeoPoint>()
-            for (j in 0 until ptsArr.length()) {
-                val p = ptsArr.optJSONObject(j) ?: continue
-                val lat = p.optDouble("lat", Double.NaN)
-                val lon = p.optDouble("lon", Double.NaN)
-                if (!lat.isNaN() && !lon.isNaN()) {
-                    pts.add(GeoPoint(lat, lon, p.optDouble("alt", 45.0)))
-                }
-            }
-            if (pts.isNotEmpty()) {
-                val ts = when {
-                    obj.has("updatedAt") -> obj.optLong("updatedAt", System.currentTimeMillis())
-                    else -> obj.optLong("createdAt", System.currentTimeMillis())
-                }
-                list.add(
-                    SavedRoute(
-                        id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
-                        name = obj.optString("name", fallbackName).ifBlank { fallbackName },
-                        waypoints = pts,
-                        loop = obj.optBoolean("loop", true),
-                        maxLaps = obj.optInt("maxLaps", 0).coerceAtLeast(0),
-                        targetDistanceKm = obj.optDouble("targetKm", 0.0).toFloat().coerceAtLeast(0f),
-                        speedMps = obj.optDouble("speedMps", 2.8).toFloat().coerceIn(0.5f, 8.0f),
-                        paceVarRatio = obj.optDouble("paceVar", 0.08).toFloat().coerceIn(0f, 0.20f),
-                        motionMode = obj.optInt("motionMode", KurokoProtocol.MOTION_AUTO),
-                        carryMode = obj.optInt("carryMode", KurokoProtocol.CARRY_HAND_SWING).coerceIn(0, 1),
-                        jitterM = obj.optDouble("jitterM", 2.0).toFloat().coerceIn(0f, 8.0f),
-                        updatedAtMs = ts
-                    )
-                )
-            }
-        }
-        return list.distinctBy { it.id }
-    }
-
     companion object {
         private const val LEGACY_CROSSHAIR_LABEL = "\u5F53\u524D\u51C6\u661F\u4F4D\u7F6E"
         private const val KEY_LAYER = "layer_type"
@@ -720,6 +644,235 @@ class RouteStore(context: Context) {
         private const val KEY_SPEED_PRESETS = "custom_speed_presets_json"
         private const val KEY_ROUTES = "saved_routes_json"
         private const val KEY_TARGETS = "saved_targets_json"
+
+        private val compactGson = GsonBuilder().disableHtmlEscaping().create()
+        private val prettyGson = GsonBuilder().disableHtmlEscaping().setPrettyPrinting().create()
+
+        fun exportRoutesJson(routes: List<SavedRoute>): String {
+            val root = JsonObject().apply {
+                addProperty("type", "kuroko_route")
+                addProperty("version", 1)
+                add("routes", encodeRoutesJsonArray(routes))
+            }
+            return prettyGson.toJson(root)
+        }
+
+        fun parseRoutesJson(
+            jsonText: String,
+            fallbackName: String = "Route",
+            strictImport: Boolean = false,
+            emptyErr: String = "Empty route JSON",
+            noRoutesErr: String = "Missing routes array",
+            invalidErr: String = "Invalid route data"
+        ): Result<List<SavedRoute>> = runCatching {
+            val trimmed = jsonText.trim()
+            require(trimmed.isNotEmpty()) { emptyErr }
+            val parsedElem = JsonParser.parseString(trimmed)
+            val arr = when {
+                parsedElem.isJsonArray -> parsedElem.asJsonArray
+                parsedElem.isJsonObject -> {
+                    val root = parsedElem.asJsonObject
+                    val routesElem = root.get("routes")
+                    if (routesElem != null && routesElem.isJsonArray) {
+                        routesElem.asJsonArray
+                    } else {
+                        throw IllegalArgumentException(noRoutesErr)
+                    }
+                }
+                else -> throw IllegalArgumentException(invalidErr)
+            }
+            val parsed = parseRoutesFromArray(
+                arr = arr,
+                fallbackName = fallbackName,
+                strictImport = strictImport,
+                invalidErr = invalidErr
+            )
+            if (strictImport) {
+                require(parsed.isNotEmpty()) { invalidErr }
+            }
+            parsed
+        }
+
+        internal fun parseRoutesFromArray(
+            arr: JsonArray,
+            fallbackName: String = "Route",
+            strictImport: Boolean = false,
+            invalidErr: String = "Invalid route data"
+        ): List<SavedRoute> {
+            val list = mutableListOf<SavedRoute>()
+            for (i in 0 until arr.size()) {
+                val elem = arr.get(i)
+                if (elem == null || !elem.isJsonObject) {
+                    if (strictImport) throw IllegalArgumentException(invalidErr)
+                    continue
+                }
+                val obj = elem.asJsonObject
+                val ptsElem = obj.get("waypoints")
+                if (ptsElem == null || !ptsElem.isJsonArray) {
+                    if (strictImport) throw IllegalArgumentException(invalidErr)
+                    continue
+                }
+                val ptsArr = ptsElem.asJsonArray
+                val pts = mutableListOf<GeoPoint>()
+                var hadInvalidWaypoint = false
+                for (j in 0 until ptsArr.size()) {
+                    val wpElem = ptsArr.get(j)
+                    if (wpElem == null || !wpElem.isJsonObject) {
+                        hadInvalidWaypoint = true
+                        continue
+                    }
+                    val p = wpElem.asJsonObject
+                    val lat = p.optCoordDouble("lat")
+                    val lon = p.optCoordDouble("lon")
+                    val alt = p.optOptionalAltDouble("alt", 45.0)
+                    if (CoordTransform.isValidWgs84(lat, lon, alt)) {
+                        pts.add(GeoPoint(lat, lon, alt))
+                    } else {
+                        hadInvalidWaypoint = true
+                    }
+                }
+                val loop = obj.optBool("loop", true)
+                if (strictImport) {
+                    if (hadInvalidWaypoint || pts.size < 2 || CoordTransform.routeLengthMeters(pts, loop) <= 1e-3) {
+                        throw IllegalArgumentException(invalidErr)
+                    }
+                }
+                if (pts.isNotEmpty()) {
+                    val ts = when {
+                        obj.has("updatedAt") -> obj.optLongSafe("updatedAt", System.currentTimeMillis())
+                        else -> obj.optLongSafe("createdAt", System.currentTimeMillis())
+                    }
+                    list.add(
+                        SavedRoute(
+                            id = obj.optStr("id").ifBlank { UUID.randomUUID().toString() },
+                            name = obj.optStr("name", fallbackName).ifBlank { fallbackName },
+                            waypoints = pts,
+                            loop = loop,
+                            maxLaps = obj.optIntSafe("maxLaps", 0).coerceAtLeast(0),
+                            targetDistanceKm = obj.optDoubleSafe("targetKm", 0.0).toFloat().coerceAtLeast(0f),
+                            speedMps = obj.optDoubleSafe("speedMps", 2.8).toFloat().coerceIn(0.5f, 8.0f),
+                            paceVarRatio = obj.optDoubleSafe("paceVar", 0.08).toFloat().coerceIn(0f, 0.20f),
+                            motionMode = obj.optIntSafe("motionMode", KurokoProtocol.MOTION_AUTO),
+                            carryMode = obj.optIntSafe("carryMode", KurokoProtocol.CARRY_HAND_SWING).coerceIn(0, 1),
+                            jitterM = obj.optDoubleSafe("jitterM", 2.0).toFloat().coerceIn(0f, 8.0f),
+                            updatedAtMs = ts
+                        )
+                    )
+                }
+            }
+            return list.distinctBy { it.id }
+        }
+
+        private fun encodeRoutesJsonArray(routes: List<SavedRoute>): JsonArray {
+            val arr = JsonArray()
+            for (r in routes) {
+                val ptsArr = JsonArray()
+                for (p in r.waypoints) {
+                    ptsArr.add(JsonObject().apply {
+                        addProperty("lat", p.lat)
+                        addProperty("lon", p.lon)
+                        addProperty("alt", p.alt)
+                    })
+                }
+                arr.add(
+                    JsonObject().apply {
+                        addProperty("id", r.id)
+                        addProperty("name", r.name)
+                        add("waypoints", ptsArr)
+                        addProperty("loop", r.loop)
+                        addProperty("maxLaps", r.maxLaps)
+                        addProperty("targetKm", r.targetDistanceKm.toDouble())
+                        addProperty("speedMps", r.speedMps.toDouble())
+                        addProperty("paceVar", r.paceVarRatio.toDouble())
+                        addProperty("motionMode", r.motionMode)
+                        addProperty("carryMode", r.carryMode)
+                        addProperty("jitterM", r.jitterM.toDouble())
+                        addProperty("updatedAt", r.updatedAtMs)
+                    }
+                )
+            }
+            return arr
+        }
+
+        private fun JsonObject.optCoordDouble(key: String): Double {
+            val elem = get(key) ?: return Double.NaN
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return Double.NaN
+            val p = elem.asJsonPrimitive
+            return when {
+                p.isNumber -> runCatching { p.asDouble }.getOrDefault(Double.NaN)
+                p.isString -> p.asString.trim().toDoubleOrNull() ?: Double.NaN
+                else -> Double.NaN
+            }
+        }
+
+        private fun JsonObject.optOptionalAltDouble(key: String, default: Double): Double {
+            if (!has(key)) return default
+            val elem = get(key)
+            if (elem == null || elem.isJsonNull) return default
+            if (!elem.isJsonPrimitive) return Double.NaN
+            val p = elem.asJsonPrimitive
+            return when {
+                p.isNumber -> runCatching { p.asDouble }.getOrDefault(Double.NaN)
+                p.isString -> p.asString.trim().toDoubleOrNull() ?: Double.NaN
+                else -> Double.NaN
+            }
+        }
+
+        private fun JsonObject.optStr(key: String, default: String = ""): String {
+            val elem = get(key) ?: return default
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return default
+            return runCatching { elem.asString }.getOrDefault(default)
+        }
+
+        private fun JsonObject.optBool(key: String, default: Boolean): Boolean {
+            val elem = get(key) ?: return default
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return default
+            val p = elem.asJsonPrimitive
+            return when {
+                p.isBoolean -> p.asBoolean
+                p.isNumber -> runCatching { p.asInt != 0 }.getOrDefault(default)
+                p.isString -> when (p.asString.trim().lowercase(Locale.US)) {
+                    "true", "1" -> true
+                    "false", "0" -> false
+                    else -> default
+                }
+                else -> default
+            }
+        }
+
+        private fun JsonObject.optIntSafe(key: String, default: Int): Int {
+            val elem = get(key) ?: return default
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return default
+            val p = elem.asJsonPrimitive
+            return when {
+                p.isNumber -> runCatching { p.asInt }.getOrDefault(default)
+                p.isString -> p.asString.trim().toIntOrNull() ?: default
+                else -> default
+            }
+        }
+
+        private fun JsonObject.optLongSafe(key: String, default: Long): Long {
+            val elem = get(key) ?: return default
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return default
+            val p = elem.asJsonPrimitive
+            return when {
+                p.isNumber -> runCatching { p.asLong }.getOrDefault(default)
+                p.isString -> p.asString.trim().toLongOrNull() ?: default
+                else -> default
+            }
+        }
+
+        private fun JsonObject.optDoubleSafe(key: String, default: Double): Double {
+            val elem = get(key) ?: return default
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return default
+            val p = elem.asJsonPrimitive
+            val v = when {
+                p.isNumber -> runCatching { p.asDouble }.getOrDefault(default)
+                p.isString -> p.asString.trim().toDoubleOrNull() ?: default
+                else -> default
+            }
+            return if (v.isFinite()) v else default
+        }
     }
 }
 

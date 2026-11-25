@@ -5,6 +5,8 @@ import androidx.annotation.StringRes
 import com.kuroko.teleport.BuildConfig
 import com.kuroko.teleport.R
 import com.kuroko.teleport.diag.AppLogBuffer
+import com.kuroko.teleport.geo.CoordTransform
+import com.kuroko.teleport.geo.GeoPoint
 import com.kuroko.teleport.rf.PinnedBleBeacon
 import com.kuroko.teleport.rf.PinnedCell
 import com.kuroko.teleport.rf.PinnedWifiAp
@@ -153,7 +155,8 @@ data class SimStatus(
     val rfCells: Int = 0,
     val rfWifis: Int = 0,
     val rfBles: Int = 0,
-    val rfServing: String = ""
+    val rfServing: String = "",
+    val daemonPid: Int = 0
 )
 
 typealias DaemonStatus = SimStatus
@@ -478,7 +481,8 @@ class DaemonClient {
             rfCells = j.optInt("rf_cells", 0),
             rfWifis = j.optInt("rf_wifis", 0),
             rfBles = j.optInt("rf_bles", 0),
-            rfServing = j.optString("rf_serving", "")
+            rfServing = j.optString("rf_serving", ""),
+            daemonPid = j.optInt("daemon_pid", 0)
         )
     }
 
@@ -491,6 +495,9 @@ class DaemonClient {
     suspend fun resetSteps(): Result<String> = sendCommand("RESET_STEPS")
 
     suspend fun setPoint(latWgs84: Double, lonWgs84: Double, altM: Double = 45.0): Result<String> {
+        if (!CoordTransform.isValidWgs84(latWgs84, lonWgs84, altM)) {
+            return Result.failure(IllegalArgumentException("ERR INVALID_COORDS"))
+        }
         val cmd = String.format(Locale.US, "SET_POINT %.7f %.7f %.2f", latWgs84, lonWgs84, altM)
         return sendCommand(cmd)
     }
@@ -508,6 +515,15 @@ class DaemonClient {
             return Result.failure(
                 IllegalArgumentException(errMsg(R.string.daemon_err_empty_route, "Route cannot be empty"))
             )
+        }
+        if (points.any { !CoordTransform.isValidWgs84(it.latWgs84, it.lonWgs84, it.altM) }) {
+            return Result.failure(IllegalArgumentException("ERR INVALID_COORDS"))
+        }
+        if (points.size >= 2) {
+            val geoPts = points.map { GeoPoint(it.latWgs84, it.lonWgs84, it.altM) }
+            if (CoordTransform.routeLengthMeters(geoPts, loop) <= 1e-3) {
+                return Result.failure(IllegalArgumentException("ERR ZERO_LENGTH_ROUTE"))
+            }
         }
         val loopFlag = if (loop) 1 else 0
         val clampedLaps = maxLaps.coerceAtLeast(0)

@@ -49,10 +49,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.gson.GsonBuilder
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import com.kuroko.teleport.R
+import com.kuroko.teleport.geo.CoordTransform
 import com.kuroko.teleport.geo.GeoPoint
-import org.json.JSONArray
-import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -80,84 +83,191 @@ class PointStore(context: Context) {
 
     fun loadPoints(): List<SavedPoint> {
         val raw = prefs.getString(KEY_POINTS, null) ?: return emptyList()
-        return runCatching { parsePointsFromArray(JSONArray(raw)) }.getOrDefault(emptyList())
+        val fallbackName = localizedCtx().getString(R.string.point_unnamed)
+        return parsePointsJson(raw, fallbackName = fallbackName, strictImport = false)
+            .getOrDefault(emptyList())
     }
 
     fun savePoints(points: List<SavedPoint>) {
-        prefs.edit().putString(KEY_POINTS, encodePointsJsonArray(points).toString()).apply()
+        prefs.edit().putString(KEY_POINTS, compactGson.toJson(encodePointsJsonArray(points))).apply()
     }
 
     fun exportPointsJson(points: List<SavedPoint>): String {
-        return JSONObject().apply {
-            put("type", "kuroko_points")
-            put("version", 1)
-            put("points", encodePointsJsonArray(points))
-        }.toString(2)
+        return Companion.exportPointsJson(points)
     }
 
-    fun importPointsJson(jsonText: String): Result<List<SavedPoint>> = runCatching {
+    fun importPointsJson(jsonText: String): Result<List<SavedPoint>> {
         val uiCtx = localizedCtx()
-        val trimmed = jsonText.trim()
-        require(trimmed.isNotEmpty()) { uiCtx.getString(R.string.point_import_err_empty) }
-        val arr = if (trimmed.startsWith("[")) {
-            JSONArray(trimmed)
-        } else {
-            val root = JSONObject(trimmed)
-            root.optJSONArray("points")
-                ?: throw IllegalArgumentException(uiCtx.getString(R.string.point_import_err_no_points))
-        }
-        val parsed = parsePointsFromArray(arr)
-        require(parsed.isNotEmpty()) { uiCtx.getString(R.string.point_import_err_invalid) }
-        parsed
-    }
-
-    private fun encodePointsJsonArray(points: List<SavedPoint>): JSONArray {
-        val arr = JSONArray()
-        for (p in points) {
-            arr.put(
-                JSONObject().apply {
-                    put("id", p.id)
-                    put("name", p.name)
-                    put("lat", p.latWgs84)
-                    put("lon", p.lonWgs84)
-                    put("alt", p.altM)
-                    put("jitterM", p.jitterM.toDouble())
-                    put("updatedAt", p.updatedAtMs)
-                }
-            )
-        }
-        return arr
-    }
-
-    private fun parsePointsFromArray(arr: JSONArray): List<SavedPoint> {
-        val fallbackName = localizedCtx().getString(R.string.point_unnamed)
-        val list = mutableListOf<SavedPoint>()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val lat = o.optDouble("lat", Double.NaN)
-            val lon = o.optDouble("lon", Double.NaN)
-            if (lat.isNaN() || lon.isNaN()) continue
-            val ts = when {
-                o.has("updatedAt") -> o.optLong("updatedAt", System.currentTimeMillis())
-                else -> o.optLong("createdAt", System.currentTimeMillis())
-            }
-            list.add(
-                SavedPoint(
-                    id = o.optString("id").ifBlank { UUID.randomUUID().toString() },
-                    name = o.optString("name", fallbackName).ifBlank { fallbackName },
-                    latWgs84 = lat,
-                    lonWgs84 = lon,
-                    altM = o.optDouble("alt", 45.0),
-                    jitterM = o.optDouble("jitterM", 1.5).toFloat().coerceIn(0f, 8f),
-                    updatedAtMs = ts
-                )
-            )
-        }
-        return list.distinctBy { it.id }
+        return parsePointsJson(
+            jsonText = jsonText,
+            fallbackName = uiCtx.getString(R.string.point_unnamed),
+            strictImport = true,
+            emptyErr = uiCtx.getString(R.string.point_import_err_empty),
+            noPointsErr = uiCtx.getString(R.string.point_import_err_no_points),
+            invalidErr = uiCtx.getString(R.string.point_import_err_invalid)
+        )
     }
 
     companion object {
         private const val KEY_POINTS = "saved_points_json"
+        private val compactGson = GsonBuilder().disableHtmlEscaping().create()
+        private val prettyGson = GsonBuilder().disableHtmlEscaping().setPrettyPrinting().create()
+
+        fun exportPointsJson(points: List<SavedPoint>): String {
+            val root = JsonObject().apply {
+                addProperty("type", "kuroko_points")
+                addProperty("version", 1)
+                add("points", encodePointsJsonArray(points))
+            }
+            return prettyGson.toJson(root)
+        }
+
+        fun parsePointsJson(
+            jsonText: String,
+            fallbackName: String = "Point",
+            strictImport: Boolean = false,
+            emptyErr: String = "Empty point JSON",
+            noPointsErr: String = "Missing points array",
+            invalidErr: String = "Invalid point data"
+        ): Result<List<SavedPoint>> = runCatching {
+            val trimmed = jsonText.trim()
+            require(trimmed.isNotEmpty()) { emptyErr }
+            val parsedElem = JsonParser.parseString(trimmed)
+            val arr = when {
+                parsedElem.isJsonArray -> parsedElem.asJsonArray
+                parsedElem.isJsonObject -> {
+                    val root = parsedElem.asJsonObject
+                    val ptsElem = root.get("points")
+                    if (ptsElem != null && ptsElem.isJsonArray) {
+                        ptsElem.asJsonArray
+                    } else {
+                        throw IllegalArgumentException(noPointsErr)
+                    }
+                }
+                else -> throw IllegalArgumentException(invalidErr)
+            }
+            val parsed = parsePointsFromArray(
+                arr = arr,
+                fallbackName = fallbackName,
+                strictImport = strictImport,
+                invalidErr = invalidErr
+            )
+            if (strictImport) {
+                require(parsed.isNotEmpty()) { invalidErr }
+            }
+            parsed
+        }
+
+        internal fun parsePointsFromArray(
+            arr: JsonArray,
+            fallbackName: String = "Point",
+            strictImport: Boolean = false,
+            invalidErr: String = "Invalid point data"
+        ): List<SavedPoint> {
+            val list = mutableListOf<SavedPoint>()
+            for (i in 0 until arr.size()) {
+                val elem = arr.get(i)
+                if (elem == null || !elem.isJsonObject) {
+                    if (strictImport) throw IllegalArgumentException(invalidErr)
+                    continue
+                }
+                val o = elem.asJsonObject
+                val lat = o.optCoordDouble("lat")
+                val lon = o.optCoordDouble("lon")
+                val alt = o.optOptionalAltDouble("alt", 45.0)
+                if (!CoordTransform.isValidWgs84(lat, lon, alt)) {
+                    if (strictImport) throw IllegalArgumentException(invalidErr)
+                    continue
+                }
+                val ts = when {
+                    o.has("updatedAt") -> o.optLongSafe("updatedAt", System.currentTimeMillis())
+                    else -> o.optLongSafe("createdAt", System.currentTimeMillis())
+                }
+                list.add(
+                    SavedPoint(
+                        id = o.optStr("id").ifBlank { UUID.randomUUID().toString() },
+                        name = o.optStr("name", fallbackName).ifBlank { fallbackName },
+                        latWgs84 = lat,
+                        lonWgs84 = lon,
+                        altM = alt,
+                        jitterM = o.optDoubleSafe("jitterM", 1.5).toFloat().coerceIn(0f, 8f),
+                        updatedAtMs = ts
+                    )
+                )
+            }
+            return list.distinctBy { it.id }
+        }
+
+        private fun encodePointsJsonArray(points: List<SavedPoint>): JsonArray {
+            val arr = JsonArray()
+            for (p in points) {
+                arr.add(
+                    JsonObject().apply {
+                        addProperty("id", p.id)
+                        addProperty("name", p.name)
+                        addProperty("lat", p.latWgs84)
+                        addProperty("lon", p.lonWgs84)
+                        addProperty("alt", p.altM)
+                        addProperty("jitterM", p.jitterM.toDouble())
+                        addProperty("updatedAt", p.updatedAtMs)
+                    }
+                )
+            }
+            return arr
+        }
+
+        private fun JsonObject.optCoordDouble(key: String): Double {
+            val elem = get(key) ?: return Double.NaN
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return Double.NaN
+            val p = elem.asJsonPrimitive
+            return when {
+                p.isNumber -> runCatching { p.asDouble }.getOrDefault(Double.NaN)
+                p.isString -> p.asString.trim().toDoubleOrNull() ?: Double.NaN
+                else -> Double.NaN
+            }
+        }
+
+        private fun JsonObject.optOptionalAltDouble(key: String, default: Double): Double {
+            if (!has(key)) return default
+            val elem = get(key)
+            if (elem == null || elem.isJsonNull) return default
+            if (!elem.isJsonPrimitive) return Double.NaN
+            val p = elem.asJsonPrimitive
+            return when {
+                p.isNumber -> runCatching { p.asDouble }.getOrDefault(Double.NaN)
+                p.isString -> p.asString.trim().toDoubleOrNull() ?: Double.NaN
+                else -> Double.NaN
+            }
+        }
+
+        private fun JsonObject.optStr(key: String, default: String = ""): String {
+            val elem = get(key) ?: return default
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return default
+            return runCatching { elem.asString }.getOrDefault(default)
+        }
+
+        private fun JsonObject.optLongSafe(key: String, default: Long): Long {
+            val elem = get(key) ?: return default
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return default
+            val p = elem.asJsonPrimitive
+            return when {
+                p.isNumber -> runCatching { p.asLong }.getOrDefault(default)
+                p.isString -> p.asString.trim().toLongOrNull() ?: default
+                else -> default
+            }
+        }
+
+        private fun JsonObject.optDoubleSafe(key: String, default: Double): Double {
+            val elem = get(key) ?: return default
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return default
+            val p = elem.asJsonPrimitive
+            val v = when {
+                p.isNumber -> runCatching { p.asDouble }.getOrDefault(default)
+                p.isString -> p.asString.trim().toDoubleOrNull() ?: default
+                else -> default
+            }
+            return if (v.isFinite()) v else default
+        }
     }
 }
 

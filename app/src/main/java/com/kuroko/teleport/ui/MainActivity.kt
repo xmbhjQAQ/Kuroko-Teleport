@@ -572,7 +572,16 @@ private fun KurokoControllerScreen() {
             targetApps = resolvedTargets
         }
         if (resolvedTargets.isNotEmpty() || daemonStatus.targetCount > 0) {
-            daemon.setTargets(resolvedTargets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+            val tRes = daemon.setTargets(resolvedTargets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+            if (tRes.isFailure) {
+                showToast(
+                    context.getString(
+                        R.string.main_toast_targets_sync_failed,
+                        tRes.exceptionOrNull()?.message.orEmpty()
+                    )
+                )
+                return
+            }
         }
         val ptRes = daemon.setPoint(targetPt.lat, targetPt.lon, targetPt.alt)
         if (ptRes.isFailure) {
@@ -607,7 +616,16 @@ private fun KurokoControllerScreen() {
             targetApps = resolvedTargets
         }
         if (resolvedTargets.isNotEmpty() || daemonStatus.targetCount > 0) {
-            daemon.setTargets(resolvedTargets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+            val tRes = daemon.setTargets(resolvedTargets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+            if (tRes.isFailure) {
+                showToast(
+                    context.getString(
+                        R.string.main_toast_targets_sync_failed,
+                        tRes.exceptionOrNull()?.message.orEmpty()
+                    )
+                )
+                return
+            }
         }
         KurokoRuntime.syncMotionStateFromUi(speedMps, paceVarRatio, motionMode, carryMode)
         daemon.setSpeed(speedMps)

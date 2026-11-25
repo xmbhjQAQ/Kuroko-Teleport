@@ -1,9 +1,12 @@
 package com.kuroko.teleport.rf
 
 import android.content.Context
+import com.google.gson.GsonBuilder
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import com.kuroko.teleport.geo.CoordTransform
 import com.kuroko.teleport.ipc.KurokoProtocol
-import org.json.JSONArray
-import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import java.util.Locale
@@ -245,14 +248,14 @@ class RfConfigStore(context: Context) {
         if (raw.isNullOrBlank()) {
             return RfConfig(openCellIdToken = savedToken)
         }
-        return parseConfigJson(raw, preserveToken = savedToken).getOrElse {
+        return parseConfigJson(raw, preserveToken = savedToken, strictImport = false).getOrElse {
             RfConfig(openCellIdToken = savedToken)
         }
     }
 
     fun saveConfig(config: RfConfig) {
         val clean = sanitizeConfig(config)
-        val json = encodeConfigObject(clean).toString()
+        val json = compactGson.toJson(encodeConfigObject(clean))
         prefs.edit()
             .putString(KEY_RF_CONFIG_JSON, json)
             .putString(KEY_OPENCELLID_TOKEN, clean.openCellIdToken.trim())
@@ -264,227 +267,370 @@ class RfConfigStore(context: Context) {
      * Deliberately EXCLUDES openCellIdToken so personal API keys are never exported.
      */
     fun exportConfigJson(config: RfConfig): String {
-        val clean = sanitizeConfig(config)
-        return encodeConfigObject(clean).apply {
-            put("type", "kuroko_rf_config")
-            put("version", 1)
-        }.toString(2)
+        return Companion.exportConfigJson(config)
     }
 
     fun importConfigJson(rawJson: String, preserveToken: String): Result<RfConfig> {
-        return parseConfigJson(rawJson, preserveToken = preserveToken)
-    }
-
-    private fun sanitizeConfig(c: RfConfig): RfConfig = c.copy(
-        carrierMcc = c.carrierMcc.coerceIn(0, 999),
-        carrierMnc = c.carrierMnc.coerceIn(0, 999),
-        carrierMncDigits = if (c.carrierMncDigits == 3) 3 else 2,
-        carrierCountryIso = c.carrierCountryIso.trim().lowercase(Locale.US).filter { it in 'a'..'z' }.take(2),
-        carrierAlpha = RfFormatting.truncateUtf8(c.carrierAlpha.trim(), 15),
-        openCellIdToken = c.openCellIdToken.trim(),
-        pinnedCells = c.pinnedCells.take(KurokoProtocol.MAX_PINNED_CELLS).map { sanitizeCell(it) },
-        pinnedWifis = c.pinnedWifis.take(KurokoProtocol.MAX_PINNED_WIFIS).map { sanitizeWifi(it) },
-        pinnedBeacons = c.pinnedBeacons.take(KurokoProtocol.MAX_PINNED_BEACONS).map { sanitizeBeacon(it) }
-    )
-
-    private fun sanitizeCell(cell: PinnedCell): PinnedCell = cell.copy(
-        rat = if (cell.rat == 2) 2 else 1,
-        mcc = cell.mcc.coerceIn(1, 999),
-        mnc = cell.mnc.coerceIn(0, 999),
-        mncDigits = if (cell.mncDigits == 3) 3 else 2,
-        tac = cell.tac.coerceIn(0L, 16_777_215L),
-        ci = cell.ci.coerceAtLeast(0L),
-        pci = cell.pci.coerceIn(0, 1007),
-        arfcn = cell.arfcn.coerceAtLeast(0),
-        band = cell.band.coerceIn(0, 512),
-        rsrpDbm = cell.rsrpDbm.coerceIn(-140, -44)
-    )
-
-    private fun sanitizeWifi(ap: PinnedWifiAp): PinnedWifiAp = ap.copy(
-        bssid = RfFormatting.normalizeMac(ap.bssid),
-        ssid = RfFormatting.truncateUtf8(ap.ssid.trim(), 32).ifEmpty { "WiFi-AP" },
-        frequencyMhz = ap.frequencyMhz.coerceIn(2412, 7125),
-        rssiDbm = ap.rssiDbm.coerceIn(-100, -25)
-    )
-
-    private fun sanitizeBeacon(b: PinnedBleBeacon): PinnedBleBeacon = b.copy(
-        mac = RfFormatting.normalizeMac(b.mac),
-        deviceType = if (b.deviceType == 1) 1 else 0,
-        name = RfFormatting.truncateUtf8(b.name.trim(), 24),
-        uuidHex32 = RfFormatting.normalizeUuidHex32(b.uuidHex32),
-        major = b.major.coerceIn(0, 65535),
-        minor = b.minor.coerceIn(0, 65535),
-        txPowerDbm = b.txPowerDbm.coerceIn(-100, 10)
-    )
-
-    private fun encodeConfigObject(c: RfConfig): JSONObject {
-        return JSONObject().apply {
-            put("cellAuto", c.cellAuto)
-            put("wifiAuto", c.wifiAuto)
-            put("wifiSpoofConnected", c.wifiSpoofConnected)
-            put("bleAmbient", c.bleAmbient)
-            put("spoofSimCountry", c.spoofSimCountry)
-            put("cellPrefer5g", c.cellPrefer5g)
-            put("carrierAuto", c.carrierAuto)
-            put("carrierMcc", c.carrierMcc)
-            put("carrierMnc", c.carrierMnc)
-            put("carrierMncDigits", c.carrierMncDigits)
-            put("carrierCountryIso", c.carrierCountryIso)
-            put("carrierAlpha", c.carrierAlpha)
-            put("pinnedCells", JSONArray().apply {
-                for (cell in c.pinnedCells) {
-                    put(JSONObject().apply {
-                        put("id", cell.id)
-                        put("rat", cell.rat)
-                        put("mcc", cell.mcc)
-                        put("mnc", cell.mnc)
-                        put("mncDigits", cell.mncDigits)
-                        put("tac", cell.tac)
-                        put("ci", cell.ci)
-                        put("pci", cell.pci)
-                        put("arfcn", cell.arfcn)
-                        put("band", cell.band)
-                        put("rsrpDbm", cell.rsrpDbm)
-                        put("followVirtual", cell.followVirtual)
-                        put("pinLat", cell.pinLat)
-                        put("pinLon", cell.pinLon)
-                    })
-                }
-            })
-            put("pinnedWifis", JSONArray().apply {
-                for (ap in c.pinnedWifis) {
-                    put(JSONObject().apply {
-                        put("id", ap.id)
-                        put("bssid", ap.bssid)
-                        put("ssid", ap.ssid)
-                        put("frequencyMhz", ap.frequencyMhz)
-                        put("rssiDbm", ap.rssiDbm)
-                        put("isConnectedAp", ap.isConnectedAp)
-                        put("followVirtual", ap.followVirtual)
-                        put("pinLat", ap.pinLat)
-                        put("pinLon", ap.pinLon)
-                    })
-                }
-            })
-            put("pinnedBeacons", JSONArray().apply {
-                for (b in c.pinnedBeacons) {
-                    put(JSONObject().apply {
-                        put("id", b.id)
-                        put("mac", b.mac)
-                        put("deviceType", b.deviceType)
-                        put("name", b.name)
-                        put("uuidHex32", b.uuidHex32)
-                        put("major", b.major)
-                        put("minor", b.minor)
-                        put("txPowerDbm", b.txPowerDbm)
-                        put("followVirtual", b.followVirtual)
-                        put("pinLat", b.pinLat)
-                        put("pinLon", b.pinLon)
-                    })
-                }
-            })
-        }
-    }
-
-    private fun parseConfigJson(rawJson: String, preserveToken: String): Result<RfConfig> = runCatching {
-        val trimmed = rawJson.trim()
-        require(trimmed.isNotEmpty()) { "empty JSON" }
-        val o = JSONObject(trimmed)
-        val cellsArr = o.optJSONArray("pinnedCells") ?: JSONArray()
-        val cells = mutableListOf<PinnedCell>()
-        for (i in 0 until minOf(cellsArr.length(), KurokoProtocol.MAX_PINNED_CELLS)) {
-            val c = cellsArr.optJSONObject(i) ?: continue
-            cells.add(
-                sanitizeCell(
-                    PinnedCell(
-                        id = c.optString("id").ifBlank { UUID.randomUUID().toString() },
-                        rat = c.optInt("rat", 1),
-                        mcc = c.optInt("mcc", 460),
-                        mnc = c.optInt("mnc", 0),
-                        mncDigits = c.optInt("mncDigits", 2),
-                        tac = c.optLong("tac", 12345L),
-                        ci = c.optLong("ci", 67890123L),
-                        pci = c.optInt("pci", 101),
-                        arfcn = c.optInt("arfcn", 38950),
-                        band = c.optInt("band", 40),
-                        rsrpDbm = c.optInt("rsrpDbm", -82),
-                        followVirtual = c.optBoolean("followVirtual", true),
-                        pinLat = c.optDouble("pinLat", 0.0),
-                        pinLon = c.optDouble("pinLon", 0.0)
-                    )
-                )
-            )
-        }
-
-        val wifisArr = o.optJSONArray("pinnedWifis") ?: JSONArray()
-        val wifis = mutableListOf<PinnedWifiAp>()
-        for (i in 0 until minOf(wifisArr.length(), KurokoProtocol.MAX_PINNED_WIFIS)) {
-            val w = wifisArr.optJSONObject(i) ?: continue
-            wifis.add(
-                sanitizeWifi(
-                    PinnedWifiAp(
-                        id = w.optString("id").ifBlank { UUID.randomUUID().toString() },
-                        bssid = w.optString("bssid", "02:1A:2B:3C:4D:5E"),
-                        ssid = w.optString("ssid", "WiFi-AP"),
-                        frequencyMhz = w.optInt("frequencyMhz", 5180),
-                        rssiDbm = w.optInt("rssiDbm", -58),
-                        isConnectedAp = w.optBoolean("isConnectedAp", false),
-                        followVirtual = w.optBoolean("followVirtual", true),
-                        pinLat = w.optDouble("pinLat", 0.0),
-                        pinLon = w.optDouble("pinLon", 0.0)
-                    )
-                )
-            )
-        }
-
-        val beaconsArr = o.optJSONArray("pinnedBeacons") ?: JSONArray()
-        val beacons = mutableListOf<PinnedBleBeacon>()
-        for (i in 0 until minOf(beaconsArr.length(), KurokoProtocol.MAX_PINNED_BEACONS)) {
-            val b = beaconsArr.optJSONObject(i) ?: continue
-            beacons.add(
-                sanitizeBeacon(
-                    PinnedBleBeacon(
-                        id = b.optString("id").ifBlank { UUID.randomUUID().toString() },
-                        mac = b.optString("mac", "D4:3B:04:11:22:33"),
-                        deviceType = b.optInt("deviceType", 1),
-                        name = b.optString("name", ""),
-                        uuidHex32 = b.optString("uuidHex32", ""),
-                        major = b.optInt("major", 1),
-                        minor = b.optInt("minor", 1),
-                        txPowerDbm = b.optInt("txPowerDbm", -59),
-                        followVirtual = b.optBoolean("followVirtual", true),
-                        pinLat = b.optDouble("pinLat", 0.0),
-                        pinLon = b.optDouble("pinLon", 0.0)
-                    )
-                )
-            )
-        }
-
-        sanitizeConfig(
-            RfConfig(
-                cellAuto = o.optBoolean("cellAuto", true),
-                wifiAuto = o.optBoolean("wifiAuto", true),
-                wifiSpoofConnected = o.optBoolean("wifiSpoofConnected", true),
-                bleAmbient = o.optBoolean("bleAmbient", false),
-                spoofSimCountry = o.optBoolean("spoofSimCountry", false),
-                cellPrefer5g = o.optBoolean("cellPrefer5g", true),
-                carrierAuto = o.optBoolean("carrierAuto", true),
-                carrierMcc = o.optInt("carrierMcc", 0),
-                carrierMnc = o.optInt("carrierMnc", 0),
-                carrierMncDigits = o.optInt("carrierMncDigits", 2),
-                carrierCountryIso = o.optString("carrierCountryIso", ""),
-                carrierAlpha = o.optString("carrierAlpha", ""),
-                openCellIdToken = preserveToken,
-                pinnedCells = cells,
-                pinnedWifis = wifis,
-                pinnedBeacons = beacons
-            )
-        )
+        return parseConfigJson(rawJson, preserveToken = preserveToken, strictImport = true)
     }
 
     companion object {
         private const val PREFS_NAME = "kuroko_rf_v1"
         private const val KEY_RF_CONFIG_JSON = "rf_config_json"
         private const val KEY_OPENCELLID_TOKEN = "opencellid_token"
+        private const val RF_CONFIG_TYPE = "kuroko_rf_config"
+
+        private val KNOWN_CONFIG_KEYS = setOf(
+            "cellAuto",
+            "wifiAuto",
+            "wifiSpoofConnected",
+            "bleAmbient",
+            "spoofSimCountry",
+            "cellPrefer5g",
+            "carrierAuto",
+            "carrierMcc",
+            "carrierMnc",
+            "carrierMncDigits",
+            "carrierCountryIso",
+            "carrierAlpha",
+            "pinnedCells",
+            "pinnedWifis",
+            "pinnedBeacons"
+        )
+
+        private val compactGson = GsonBuilder().disableHtmlEscaping().create()
+        private val prettyGson = GsonBuilder().disableHtmlEscaping().setPrettyPrinting().create()
+
+        fun exportConfigJson(config: RfConfig): String {
+            val clean = sanitizeConfig(config)
+            val obj = encodeConfigObject(clean)
+            obj.addProperty("type", RF_CONFIG_TYPE)
+            obj.addProperty("version", 1)
+            return prettyGson.toJson(obj)
+        }
+
+        fun parseConfigJson(
+            rawJson: String,
+            preserveToken: String = "",
+            strictImport: Boolean = false
+        ): Result<RfConfig> = runCatching {
+            val trimmed = rawJson.trim()
+            require(trimmed.isNotEmpty()) { "empty JSON" }
+            val parsedElem = JsonParser.parseString(trimmed)
+            require(parsedElem.isJsonObject) { "RF config JSON must be an object" }
+            val o = parsedElem.asJsonObject
+
+            if (strictImport) {
+                var hasValidType = false
+                if (o.has("type")) {
+                    val typeElem = o.get("type")
+                    val typeVal = if (typeElem != null && typeElem.isJsonPrimitive && typeElem.asJsonPrimitive.isString) {
+                        typeElem.asString
+                    } else {
+                        null
+                    }
+                    require(typeVal == RF_CONFIG_TYPE) {
+                        "Unsupported JSON type: ${typeVal ?: "invalid"}"
+                    }
+                    hasValidType = true
+                }
+                val hasKnownKey = KNOWN_CONFIG_KEYS.any { o.has(it) }
+                require(hasValidType || hasKnownKey) {
+                    "Unrecognized RF config JSON"
+                }
+                for (arrKey in listOf("pinnedCells", "pinnedWifis", "pinnedBeacons")) {
+                    if (o.has(arrKey) && !o.get(arrKey).isJsonNull) {
+                        require(o.get(arrKey).isJsonArray) {
+                            "Field '$arrKey' must be a JSON array"
+                        }
+                    }
+                }
+            }
+
+            val cellsArr = o.optJsonArray("pinnedCells")
+            val cells = mutableListOf<PinnedCell>()
+            if (cellsArr != null) {
+                for (i in 0 until minOf(cellsArr.size(), KurokoProtocol.MAX_PINNED_CELLS)) {
+                    val c = cellsArr.get(i)?.takeIf { it.isJsonObject }?.asJsonObject ?: continue
+                    cells.add(
+                        sanitizeCell(
+                            PinnedCell(
+                                id = c.optStr("id").ifBlank { UUID.randomUUID().toString() },
+                                rat = c.optIntSafe("rat", 1),
+                                mcc = c.optIntSafe("mcc", 460),
+                                mnc = c.optIntSafe("mnc", 0),
+                                mncDigits = c.optIntSafe("mncDigits", 2),
+                                tac = c.optLongSafe("tac", 12345L),
+                                ci = c.optLongSafe("ci", 67890123L),
+                                pci = c.optIntSafe("pci", 101),
+                                arfcn = c.optIntSafe("arfcn", 38950),
+                                band = c.optIntSafe("band", 40),
+                                rsrpDbm = c.optIntSafe("rsrpDbm", -82),
+                                followVirtual = c.optBool("followVirtual", true),
+                                pinLat = c.optPinDouble("pinLat"),
+                                pinLon = c.optPinDouble("pinLon")
+                            )
+                        )
+                    )
+                }
+            }
+
+            val wifisArr = o.optJsonArray("pinnedWifis")
+            val wifis = mutableListOf<PinnedWifiAp>()
+            if (wifisArr != null) {
+                for (i in 0 until minOf(wifisArr.size(), KurokoProtocol.MAX_PINNED_WIFIS)) {
+                    val w = wifisArr.get(i)?.takeIf { it.isJsonObject }?.asJsonObject ?: continue
+                    wifis.add(
+                        sanitizeWifi(
+                            PinnedWifiAp(
+                                id = w.optStr("id").ifBlank { UUID.randomUUID().toString() },
+                                bssid = w.optStr("bssid", "02:1A:2B:3C:4D:5E"),
+                                ssid = w.optStr("ssid", "WiFi-AP"),
+                                frequencyMhz = w.optIntSafe("frequencyMhz", 5180),
+                                rssiDbm = w.optIntSafe("rssiDbm", -58),
+                                isConnectedAp = w.optBool("isConnectedAp", false),
+                                followVirtual = w.optBool("followVirtual", true),
+                                pinLat = w.optPinDouble("pinLat"),
+                                pinLon = w.optPinDouble("pinLon")
+                            )
+                        )
+                    )
+                }
+            }
+
+            val beaconsArr = o.optJsonArray("pinnedBeacons")
+            val beacons = mutableListOf<PinnedBleBeacon>()
+            if (beaconsArr != null) {
+                for (i in 0 until minOf(beaconsArr.size(), KurokoProtocol.MAX_PINNED_BEACONS)) {
+                    val b = beaconsArr.get(i)?.takeIf { it.isJsonObject }?.asJsonObject ?: continue
+                    beacons.add(
+                        sanitizeBeacon(
+                            PinnedBleBeacon(
+                                id = b.optStr("id").ifBlank { UUID.randomUUID().toString() },
+                                mac = b.optStr("mac", "D4:3B:04:11:22:33"),
+                                deviceType = b.optIntSafe("deviceType", 1),
+                                name = b.optStr("name", ""),
+                                uuidHex32 = b.optStr("uuidHex32", ""),
+                                major = b.optIntSafe("major", 1),
+                                minor = b.optIntSafe("minor", 1),
+                                txPowerDbm = b.optIntSafe("txPowerDbm", -59),
+                                followVirtual = b.optBool("followVirtual", true),
+                                pinLat = b.optPinDouble("pinLat"),
+                                pinLon = b.optPinDouble("pinLon")
+                            )
+                        )
+                    )
+                }
+            }
+
+            sanitizeConfig(
+                RfConfig(
+                    cellAuto = o.optBool("cellAuto", true),
+                    wifiAuto = o.optBool("wifiAuto", true),
+                    wifiSpoofConnected = o.optBool("wifiSpoofConnected", true),
+                    bleAmbient = o.optBool("bleAmbient", false),
+                    spoofSimCountry = o.optBool("spoofSimCountry", false),
+                    cellPrefer5g = o.optBool("cellPrefer5g", true),
+                    carrierAuto = o.optBool("carrierAuto", true),
+                    carrierMcc = o.optIntSafe("carrierMcc", 0),
+                    carrierMnc = o.optIntSafe("carrierMnc", 0),
+                    carrierMncDigits = o.optIntSafe("carrierMncDigits", 2),
+                    carrierCountryIso = o.optStr("carrierCountryIso", ""),
+                    carrierAlpha = o.optStr("carrierAlpha", ""),
+                    openCellIdToken = preserveToken,
+                    pinnedCells = cells,
+                    pinnedWifis = wifis,
+                    pinnedBeacons = beacons
+                )
+            )
+        }
+
+        internal fun sanitizeConfig(c: RfConfig): RfConfig = c.copy(
+            carrierMcc = c.carrierMcc.coerceIn(0, 999),
+            carrierMnc = c.carrierMnc.coerceIn(0, 999),
+            carrierMncDigits = if (c.carrierMncDigits == 3) 3 else 2,
+            carrierCountryIso = c.carrierCountryIso.trim().lowercase(Locale.US).filter { it in 'a'..'z' }.take(2),
+            carrierAlpha = RfFormatting.truncateUtf8(c.carrierAlpha.trim(), 15),
+            openCellIdToken = c.openCellIdToken.trim(),
+            pinnedCells = c.pinnedCells.take(KurokoProtocol.MAX_PINNED_CELLS).map { sanitizeCell(it) },
+            pinnedWifis = c.pinnedWifis.take(KurokoProtocol.MAX_PINNED_WIFIS).map { sanitizeWifi(it) },
+            pinnedBeacons = c.pinnedBeacons.take(KurokoProtocol.MAX_PINNED_BEACONS).map { sanitizeBeacon(it) }
+        )
+
+        internal fun sanitizeCell(cell: PinnedCell): PinnedCell {
+            val validPin = CoordTransform.isValidWgs84(cell.pinLat, cell.pinLon)
+            return cell.copy(
+                rat = if (cell.rat == 2) 2 else 1,
+                mcc = cell.mcc.coerceIn(1, 999),
+                mnc = cell.mnc.coerceIn(0, 999),
+                mncDigits = if (cell.mncDigits == 3) 3 else 2,
+                tac = cell.tac.coerceIn(0L, 16_777_215L),
+                ci = cell.ci.coerceAtLeast(0L),
+                pci = cell.pci.coerceIn(0, 1007),
+                arfcn = cell.arfcn.coerceAtLeast(0),
+                band = cell.band.coerceIn(0, 512),
+                rsrpDbm = cell.rsrpDbm.coerceIn(-140, -44),
+                pinLat = if (validPin) cell.pinLat else 0.0,
+                pinLon = if (validPin) cell.pinLon else 0.0
+            )
+        }
+
+        internal fun sanitizeWifi(ap: PinnedWifiAp): PinnedWifiAp {
+            val validPin = CoordTransform.isValidWgs84(ap.pinLat, ap.pinLon)
+            return ap.copy(
+                bssid = RfFormatting.normalizeMac(ap.bssid),
+                ssid = RfFormatting.truncateUtf8(ap.ssid.trim(), 32).ifEmpty { "WiFi-AP" },
+                frequencyMhz = ap.frequencyMhz.coerceIn(2412, 7125),
+                rssiDbm = ap.rssiDbm.coerceIn(-100, -25),
+                pinLat = if (validPin) ap.pinLat else 0.0,
+                pinLon = if (validPin) ap.pinLon else 0.0
+            )
+        }
+
+        internal fun sanitizeBeacon(b: PinnedBleBeacon): PinnedBleBeacon {
+            val validPin = CoordTransform.isValidWgs84(b.pinLat, b.pinLon)
+            return b.copy(
+                mac = RfFormatting.normalizeMac(b.mac),
+                deviceType = if (b.deviceType == 1) 1 else 0,
+                name = RfFormatting.truncateUtf8(b.name.trim(), 24),
+                uuidHex32 = RfFormatting.normalizeUuidHex32(b.uuidHex32),
+                major = b.major.coerceIn(0, 65535),
+                minor = b.minor.coerceIn(0, 65535),
+                txPowerDbm = b.txPowerDbm.coerceIn(-100, 10),
+                pinLat = if (validPin) b.pinLat else 0.0,
+                pinLon = if (validPin) b.pinLon else 0.0
+            )
+        }
+
+        private fun encodeConfigObject(c: RfConfig): JsonObject {
+            return JsonObject().apply {
+                addProperty("cellAuto", c.cellAuto)
+                addProperty("wifiAuto", c.wifiAuto)
+                addProperty("wifiSpoofConnected", c.wifiSpoofConnected)
+                addProperty("bleAmbient", c.bleAmbient)
+                addProperty("spoofSimCountry", c.spoofSimCountry)
+                addProperty("cellPrefer5g", c.cellPrefer5g)
+                addProperty("carrierAuto", c.carrierAuto)
+                addProperty("carrierMcc", c.carrierMcc)
+                addProperty("carrierMnc", c.carrierMnc)
+                addProperty("carrierMncDigits", c.carrierMncDigits)
+                addProperty("carrierCountryIso", c.carrierCountryIso)
+                addProperty("carrierAlpha", c.carrierAlpha)
+                add("pinnedCells", JsonArray().apply {
+                    for (cell in c.pinnedCells) {
+                        add(JsonObject().apply {
+                            addProperty("id", cell.id)
+                            addProperty("rat", cell.rat)
+                            addProperty("mcc", cell.mcc)
+                            addProperty("mnc", cell.mnc)
+                            addProperty("mncDigits", cell.mncDigits)
+                            addProperty("tac", cell.tac)
+                            addProperty("ci", cell.ci)
+                            addProperty("pci", cell.pci)
+                            addProperty("arfcn", cell.arfcn)
+                            addProperty("band", cell.band)
+                            addProperty("rsrpDbm", cell.rsrpDbm)
+                            addProperty("followVirtual", cell.followVirtual)
+                            addProperty("pinLat", cell.pinLat)
+                            addProperty("pinLon", cell.pinLon)
+                        })
+                    }
+                })
+                add("pinnedWifis", JsonArray().apply {
+                    for (ap in c.pinnedWifis) {
+                        add(JsonObject().apply {
+                            addProperty("id", ap.id)
+                            addProperty("bssid", ap.bssid)
+                            addProperty("ssid", ap.ssid)
+                            addProperty("frequencyMhz", ap.frequencyMhz)
+                            addProperty("rssiDbm", ap.rssiDbm)
+                            addProperty("isConnectedAp", ap.isConnectedAp)
+                            addProperty("followVirtual", ap.followVirtual)
+                            addProperty("pinLat", ap.pinLat)
+                            addProperty("pinLon", ap.pinLon)
+                        })
+                    }
+                })
+                add("pinnedBeacons", JsonArray().apply {
+                    for (b in c.pinnedBeacons) {
+                        add(JsonObject().apply {
+                            addProperty("id", b.id)
+                            addProperty("mac", b.mac)
+                            addProperty("deviceType", b.deviceType)
+                            addProperty("name", b.name)
+                            addProperty("uuidHex32", b.uuidHex32)
+                            addProperty("major", b.major)
+                            addProperty("minor", b.minor)
+                            addProperty("txPowerDbm", b.txPowerDbm)
+                            addProperty("followVirtual", b.followVirtual)
+                            addProperty("pinLat", b.pinLat)
+                            addProperty("pinLon", b.pinLon)
+                        })
+                    }
+                })
+            }
+        }
+
+        private fun JsonObject.optJsonArray(key: String): JsonArray? {
+            val elem = get(key) ?: return null
+            return if (elem.isJsonArray) elem.asJsonArray else null
+        }
+
+        private fun JsonObject.optStr(key: String, default: String = ""): String {
+            val elem = get(key) ?: return default
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return default
+            return runCatching { elem.asString }.getOrDefault(default)
+        }
+
+        private fun JsonObject.optBool(key: String, default: Boolean): Boolean {
+            val elem = get(key) ?: return default
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return default
+            val p = elem.asJsonPrimitive
+            return when {
+                p.isBoolean -> p.asBoolean
+                p.isNumber -> runCatching { p.asInt != 0 }.getOrDefault(default)
+                p.isString -> when (p.asString.trim().lowercase(Locale.US)) {
+                    "true", "1" -> true
+                    "false", "0" -> false
+                    else -> default
+                }
+                else -> default
+            }
+        }
+
+        private fun JsonObject.optIntSafe(key: String, default: Int): Int {
+            val elem = get(key) ?: return default
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return default
+            val p = elem.asJsonPrimitive
+            return when {
+                p.isNumber -> runCatching { p.asInt }.getOrDefault(default)
+                p.isString -> p.asString.trim().toIntOrNull() ?: default
+                else -> default
+            }
+        }
+
+        private fun JsonObject.optLongSafe(key: String, default: Long): Long {
+            val elem = get(key) ?: return default
+            if (elem.isJsonNull || !elem.isJsonPrimitive) return default
+            val p = elem.asJsonPrimitive
+            return when {
+                p.isNumber -> runCatching { p.asLong }.getOrDefault(default)
+                p.isString -> p.asString.trim().toLongOrNull() ?: default
+                else -> default
+            }
+        }
+
+        private fun JsonObject.optPinDouble(key: String): Double {
+            if (!has(key)) return 0.0
+            val elem = get(key)
+            if (elem == null || elem.isJsonNull) return 0.0
+            if (!elem.isJsonPrimitive) return Double.NaN
+            val p = elem.asJsonPrimitive
+            return when {
+                p.isNumber -> runCatching { p.asDouble }.getOrDefault(Double.NaN)
+                p.isString -> p.asString.trim().toDoubleOrNull() ?: Double.NaN
+                else -> Double.NaN
+            }
+        }
     }
 }

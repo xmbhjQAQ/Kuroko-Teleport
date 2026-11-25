@@ -23,6 +23,11 @@ object CoordTransform {
     private const val EE = 0.00669342162296594323
     private const val EARTH_RADIUS_M = 6378137.0
 
+    fun isValidWgs84(lat: Double, lon: Double, alt: Double = 45.0): Boolean {
+        return lat.isFinite() && lon.isFinite() && alt.isFinite() &&
+            lat in -90.0..90.0 && lon in -180.0..180.0
+    }
+
     fun outOfChina(lat: Double, lon: Double): Boolean {
         return lon < 72.004 || lon > 137.8347 || lat < 0.8293 || lat > 55.8271
     }

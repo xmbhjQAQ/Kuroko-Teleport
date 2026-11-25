@@ -148,11 +148,17 @@ fun RfConfigDialog(
                     if (res.items.isEmpty()) {
                         onNotify(context.getString(R.string.rf_scan_empty))
                     } else {
-                        val merged = (res.items + draft.pinnedCells)
+                        val existing = draft.pinnedCells
+                        val merged = (existing + res.items)
                             .distinctBy { "${it.rat}:${it.mcc}:${it.mnc}:${it.ci}" }
                             .take(KurokoProtocol.MAX_PINNED_CELLS)
-                        draft = draft.copy(pinnedCells = merged)
-                        onNotify(context.getString(R.string.rf_scan_imported_fmt, res.items.size))
+                        val added = (merged.size - existing.size).coerceAtLeast(0)
+                        if (existing.size >= KurokoProtocol.MAX_PINNED_CELLS && added == 0) {
+                            onNotify(context.getString(R.string.rf_limit_reached_fmt, KurokoProtocol.MAX_PINNED_CELLS))
+                        } else {
+                            draft = draft.copy(pinnedCells = merged)
+                            onNotify(context.getString(R.string.rf_scan_imported_fmt, added))
+                        }
                     }
                 }
                 LiveScanOutcome.PermissionRequired -> onNotify(context.getString(R.string.rf_scan_perm_denied))
@@ -177,11 +183,17 @@ fun RfConfigDialog(
                     if (res.items.isEmpty()) {
                         onNotify(context.getString(R.string.rf_scan_empty))
                     } else {
-                        val merged = (res.items + draft.pinnedWifis)
+                        val existing = draft.pinnedWifis
+                        val merged = (existing + res.items)
                             .distinctBy { it.bssid.uppercase(Locale.US) }
                             .take(KurokoProtocol.MAX_PINNED_WIFIS)
-                        draft = draft.copy(pinnedWifis = merged)
-                        onNotify(context.getString(R.string.rf_scan_imported_fmt, res.items.size))
+                        val added = (merged.size - existing.size).coerceAtLeast(0)
+                        if (existing.size >= KurokoProtocol.MAX_PINNED_WIFIS && added == 0) {
+                            onNotify(context.getString(R.string.rf_limit_reached_fmt, KurokoProtocol.MAX_PINNED_WIFIS))
+                        } else {
+                            draft = draft.copy(pinnedWifis = merged)
+                            onNotify(context.getString(R.string.rf_scan_imported_fmt, added))
+                        }
                     }
                 }
                 LiveScanOutcome.PermissionRequired -> onNotify(context.getString(R.string.rf_scan_perm_denied))
@@ -207,11 +219,17 @@ fun RfConfigDialog(
                     if (res.items.isEmpty()) {
                         onNotify(context.getString(R.string.rf_scan_empty))
                     } else {
-                        val merged = (res.items + draft.pinnedBeacons)
+                        val existing = draft.pinnedBeacons
+                        val merged = (existing + res.items)
                             .distinctBy { it.mac.uppercase(Locale.US) }
                             .take(KurokoProtocol.MAX_PINNED_BEACONS)
-                        draft = draft.copy(pinnedBeacons = merged)
-                        onNotify(context.getString(R.string.rf_scan_imported_fmt, res.items.size))
+                        val added = (merged.size - existing.size).coerceAtLeast(0)
+                        if (existing.size >= KurokoProtocol.MAX_PINNED_BEACONS && added == 0) {
+                            onNotify(context.getString(R.string.rf_limit_reached_fmt, KurokoProtocol.MAX_PINNED_BEACONS))
+                        } else {
+                            draft = draft.copy(pinnedBeacons = merged)
+                            onNotify(context.getString(R.string.rf_scan_imported_fmt, added))
+                        }
                     }
                 }
                 LiveScanOutcome.PermissionRequired -> onNotify(context.getString(R.string.rf_scan_perm_denied))
@@ -221,12 +239,13 @@ fun RfConfigDialog(
         }
     }
 
-    val fineLocLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
+    val locPermsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
         val next = pendingScan
         pendingScan = PendingScanKind.NONE
-        if (!granted) {
+        val fineGranted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        if (!fineGranted) {
             onNotify(context.getString(R.string.rf_scan_perm_denied))
             return@rememberLauncherForActivityResult
         }
@@ -701,12 +720,23 @@ fun RfConfigDialog(
                                                     if (towers.isEmpty()) {
                                                         onNotify(context.getString(R.string.rf_opencellid_empty))
                                                     } else {
-                                                        val merged = (towers + draft.pinnedCells)
+                                                        val existing = draft.pinnedCells
+                                                        val merged = (existing + towers)
                                                             .distinctBy { "${it.rat}:${it.mcc}:${it.mnc}:${it.ci}" }
                                                             .take(KurokoProtocol.MAX_PINNED_CELLS)
-                                                        draft = draft.copy(pinnedCells = merged)
-                                                        activeTab = RfTab.CELL
-                                                        onNotify(context.getString(R.string.rf_opencellid_ok_fmt, towers.size))
+                                                        val added = (merged.size - existing.size).coerceAtLeast(0)
+                                                        if (existing.size >= KurokoProtocol.MAX_PINNED_CELLS && added == 0) {
+                                                            onNotify(
+                                                                context.getString(
+                                                                    R.string.rf_limit_reached_fmt,
+                                                                    KurokoProtocol.MAX_PINNED_CELLS
+                                                                )
+                                                            )
+                                                        } else {
+                                                            draft = draft.copy(pinnedCells = merged)
+                                                            activeTab = RfTab.CELL
+                                                            onNotify(context.getString(R.string.rf_opencellid_ok_fmt, added))
+                                                        }
                                                     }
                                                 }.onFailure { err ->
                                                     onNotify(
@@ -768,7 +798,12 @@ fun RfConfigDialog(
                                 },
                                 onImportLive = {
                                     pendingScan = PendingScanKind.CELL
-                                    fineLocLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                                    locPermsLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
                                 },
                                 onClear = { draft = draft.copy(pinnedCells = emptyList()) }
                             )
@@ -812,7 +847,12 @@ fun RfConfigDialog(
                                 },
                                 onImportLive = {
                                     pendingScan = PendingScanKind.WIFI
-                                    fineLocLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                                    locPermsLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
                                 },
                                 onClear = { draft = draft.copy(pinnedWifis = emptyList()) }
                             )
@@ -860,7 +900,8 @@ fun RfConfigDialog(
                                         arrayOf(
                                             Manifest.permission.BLUETOOTH_SCAN,
                                             Manifest.permission.BLUETOOTH_CONNECT,
-                                            Manifest.permission.ACCESS_FINE_LOCATION
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
                                         )
                                     )
                                 },

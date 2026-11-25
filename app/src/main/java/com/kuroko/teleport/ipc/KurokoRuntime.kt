@@ -72,6 +72,9 @@ object KurokoRuntime {
     private var rfConfigSynced = false
 
     @Volatile
+    private var lastObservedDaemonPid = 0
+
+    @Volatile
     private var overlayExpanded = false
 
     @Volatile
@@ -122,9 +125,17 @@ object KurokoRuntime {
     private var selfTestSessionId = 0L
 
     @Volatile
+    private var selfTestInSession = false
+
+    @Volatile
     private var selfTestTargetsActive = false
     private var selfTestSavedTargets: List<DaemonTargetSpec> = emptyList()
+
+    @Volatile
     private var selfTestTempJogActive = false
+
+    @Volatile
+    private var selfTestDaemonPid = 0
     private var selfTestPrevActive = false
     private var selfTestPrevMotionMode = KurokoProtocol.MOTION_AUTO
     private var selfTestPrevCarryMode = KurokoProtocol.CARRY_HAND_SWING
@@ -525,7 +536,12 @@ object KurokoRuntime {
             if (!selfTestTargetsActive) {
                 val targets = store.resolveActiveTargets(persistIfChanged = true)
                 if (targets.isNotEmpty() || st.targetCount > 0) {
-                    daemon.setTargets(targets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+                    val tRes = daemon.setTargets(targets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+                    if (tRes.isFailure) {
+                        AppLogBuffer.w("Runtime", "Target sync failed before resume: ${tRes.exceptionOrNull()?.message ?: "error"}")
+                        pollOnce()
+                        return tRes
+                    }
                 }
             }
             val res = daemon.start()
@@ -549,7 +565,12 @@ object KurokoRuntime {
         }
 
         if (targets.isNotEmpty() || st.targetCount > 0) {
-            daemon.setTargets(targets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+            val tRes = daemon.setTargets(targets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+            if (tRes.isFailure) {
+                AppLogBuffer.w("Runtime", "Target sync failed before start: ${tRes.exceptionOrNull()?.message ?: "error"}")
+                pollOnce()
+                return tRes
+            }
         }
         val m = _motionState.value
         daemon.setSpeed(m.speedMps)
@@ -586,11 +607,14 @@ object KurokoRuntime {
         init(context)
         val mySession = synchronized(selfTestSeqLock) {
             selfTestSessionId += 1L
+            selfTestInSession = true
             selfTestSessionId
         }
         scope.launch {
+            var shouldPoll = false
             selfTestMutex.withLock {
                 if (selfTestSessionId != mySession) return@withLock
+                shouldPoll = true
                 if (!selfTestTargetsActive) {
                     selfTestSavedTargets = RouteStore(context.applicationContext)
                         .resolveActiveTargets(persistIfChanged = true)
@@ -608,10 +632,16 @@ object KurokoRuntime {
                 val res = daemon.setTargets(merged)
                 if (res.isSuccess) {
                     selfTestTargetsActive = true
+                    val pid = _snapshot.value.status.daemonPid.takeIf { it > 0 } ?: lastObservedDaemonPid
+                    if (pid > 0) {
+                        selfTestDaemonPid = pid
+                    }
                     AppLogBuffer.i("SelfTest", "Sensor self-test started (app UID temporarily subscribed)")
                 } else {
                     AppLogBuffer.w("SelfTest", "Sensor self-test target inject failed: ${res.exceptionOrNull()?.message ?: "error"}")
                 }
+            }
+            if (shouldPoll) {
                 pollOnce()
             }
         }
@@ -624,8 +654,10 @@ object KurokoRuntime {
      */
     fun startSelfTestJogPulseAsync(sessionId: Long) {
         scope.launch {
+            var shouldPoll = false
             selfTestMutex.withLock {
                 if (selfTestSessionId != sessionId) return@withLock
+                shouldPoll = true
                 val latestRes = daemon.getStatus()
                 val connected = latestRes.isSuccess || _snapshot.value.connected
                 val latest = latestRes.getOrNull() ?: _snapshot.value.status
@@ -633,11 +665,9 @@ object KurokoRuntime {
                 _versionCompat.value = compat
                 if (!compat.canStartSimulation) {
                     AppLogBuffer.w("SelfTest", "Temporary jog pulse blocked by version lock (${compat.state})")
-                    pollOnce()
                     return@withLock
                 }
                 if (latest.active && latest.cadenceSpm >= 1f) {
-                    pollOnce()
                     return@withLock
                 }
                 if (!selfTestTempJogActive) {
@@ -649,11 +679,17 @@ object KurokoRuntime {
                 val hRes = daemon.hold()
                 if (hRes.isSuccess) {
                     selfTestTempJogActive = true
+                    val pid = latest.daemonPid.takeIf { it > 0 } ?: lastObservedDaemonPid
+                    if (pid > 0) {
+                        selfTestDaemonPid = pid
+                    }
                     _sensorSelfTestTempJogActive.value = true
                     AppLogBuffer.i("SelfTest", "Temporary jog pulse activated")
                 } else {
                     AppLogBuffer.w("SelfTest", "Temporary jog pulse failed: ${hRes.exceptionOrNull()?.message ?: "error"}")
                 }
+            }
+            if (shouldPoll) {
                 pollOnce()
             }
         }
@@ -664,19 +700,25 @@ object KurokoRuntime {
      * Runs on process-lifetime KurokoRuntime.scope so dialog dismissal never cancels cleanup.
      */
     fun endSensorSelfTestAsync() {
-        synchronized(selfTestSeqLock) {
+        val endSession = synchronized(selfTestSeqLock) {
             selfTestSessionId += 1L
+            selfTestInSession = false
+            selfTestSessionId
         }
         _sensorSelfTestTempJogActive.value = false
         scope.launch {
             selfTestMutex.withLock {
+                if (selfTestInSession || selfTestSessionId != endSession) return@withLock
                 val hadAny = selfTestTempJogActive || selfTestTargetsActive
+                var allOk = true
                 if (selfTestTempJogActive) {
-                    daemon.setMode(selfTestPrevMotionMode, selfTestPrevCarryMode)
-                    if (!selfTestPrevActive) {
-                        daemon.stop()
+                    val modeRes = daemon.setMode(selfTestPrevMotionMode, selfTestPrevCarryMode)
+                    val stopRes = if (!selfTestPrevActive) daemon.stop() else Result.success("OK")
+                    if (modeRes.isSuccess && stopRes.isSuccess) {
+                        selfTestTempJogActive = false
+                    } else {
+                        allOk = false
                     }
-                    selfTestTempJogActive = false
                 }
                 if (selfTestTargetsActive) {
                     val restoreTargets = appContext?.let { ctx ->
@@ -684,14 +726,25 @@ object KurokoRuntime {
                             .resolveActiveTargets(persistIfChanged = true)
                             .map { DaemonTargetSpec(it.uid, it.policyFlags) }
                     } ?: selfTestSavedTargets
-                    daemon.setTargets(restoreTargets)
-                    selfTestTargetsActive = false
+                    val tRes = daemon.setTargets(restoreTargets)
+                    if (tRes.isSuccess) {
+                        selfTestTargetsActive = false
+                    } else {
+                        allOk = false
+                    }
+                }
+                if (!selfTestTempJogActive && !selfTestTargetsActive) {
+                    selfTestDaemonPid = 0
                 }
                 if (hadAny) {
-                    AppLogBuffer.i("SelfTest", "Sensor self-test ended and target list restored")
+                    if (allOk) {
+                        AppLogBuffer.i("SelfTest", "Sensor self-test ended and target list restored")
+                    } else {
+                        AppLogBuffer.w("SelfTest", "Sensor self-test cleanup deferred for daemon reconnect retry")
+                    }
                 }
-                pollOnce()
             }
+            pollOnce()
         }
     }
 
@@ -742,6 +795,61 @@ object KurokoRuntime {
                         "VersionLock",
                         "Version lock state=${compat.state} app=#${KurokoProtocol.APP_VERSION_CODE} mod=#${st.modCode} xp=#${st.xposedCode} zy=#${st.zygiskCode} P=${st.protoVer} SHM=${st.shmVer}"
                     )
+                }
+            }
+
+            if (st.daemonPid > 0 && lastObservedDaemonPid > 0 && st.daemonPid != lastObservedDaemonPid) {
+                AppLogBuffer.w(
+                    "Runtime",
+                    "Daemon restarted (pid $lastObservedDaemonPid -> ${st.daemonPid}); scheduling target and RF re-sync"
+                )
+                initialTargetsSynced = false
+                rfConfigSynced = false
+            }
+            if (st.daemonPid > 0) {
+                lastObservedDaemonPid = st.daemonPid
+                if (selfTestInSession && (selfTestTargetsActive || selfTestTempJogActive) && selfTestDaemonPid == 0) {
+                    selfTestDaemonPid = st.daemonPid
+                }
+            }
+
+            if (!selfTestInSession && (selfTestTempJogActive || selfTestTargetsActive)) {
+                selfTestMutex.withLock {
+                    if (!selfTestInSession && (selfTestTempJogActive || selfTestTargetsActive)) {
+                        val daemonChanged = st.daemonPid > 0 && selfTestDaemonPid > 0 && st.daemonPid != selfTestDaemonPid
+                        if (daemonChanged) {
+                            selfTestTempJogActive = false
+                            selfTestTargetsActive = false
+                            selfTestDaemonPid = 0
+                            AppLogBuffer.i(
+                                "SelfTest",
+                                "Cleared deferred self-test state after daemon restart (pid=${st.daemonPid})"
+                            )
+                        } else {
+                            if (selfTestTempJogActive) {
+                                val modeRes = daemon.setMode(selfTestPrevMotionMode, selfTestPrevCarryMode)
+                                val stopRes = if (!selfTestPrevActive) daemon.stop() else Result.success("OK")
+                                if (modeRes.isSuccess && stopRes.isSuccess) {
+                                    selfTestTempJogActive = false
+                                }
+                            }
+                            if (selfTestTargetsActive) {
+                                val restoreTargets = appContext?.let { ctx ->
+                                    RouteStore(ctx)
+                                        .resolveActiveTargets(persistIfChanged = true)
+                                        .map { DaemonTargetSpec(it.uid, it.policyFlags) }
+                                } ?: selfTestSavedTargets
+                                val tRes = daemon.setTargets(restoreTargets)
+                                if (tRes.isSuccess) {
+                                    selfTestTargetsActive = false
+                                }
+                            }
+                            if (!selfTestTempJogActive && !selfTestTargetsActive) {
+                                selfTestDaemonPid = 0
+                                AppLogBuffer.i("SelfTest", "Deferred sensor self-test cleanup completed on reconnect")
+                            }
+                        }
+                    }
                 }
             }
 
