@@ -17,6 +17,7 @@
 - **Static Pin & Realistic Route Motion**: Built-in open-source map (no Google Play Services required) with address search, saved pins, and reusable route presets (JSON import/export). Supports smooth curved paths, loop / lap-count / target-distance completion, natural pace variation, and hand-swing or pocket carry postures.
 - **Stationary Indoor Pedometer & IMU Sync**: Delivers synthetic GPS, multi-constellation GNSS/NMEA, monotonically increasing steps, and phase-synchronized motion sensors even while your phone rests completely still indoors — complete with a built-in **Sensor Self-Test** in Settings.
 - **Global RF Signal Simulation & Anti-Leak (4G/5G Cell, Wi-Fi & BLE)**: Pick per-app presets (**Full Spoof / Strict Hide / Local Outdoor**) or fine-tune Cell, Wi-Fi, and BLE independently (`Pass / Hide / Spoof`). Automatically synthesizes geo-aware regional 4G/5G cell towers & network/SIM country codes, nearby virtual Wi-Fi AP lists (regional SSIDs/OUIs/channels, 802.11d country code & optional virtual connected AP), plus Bluetooth/BLE scan suppression & custom iBeacon spoofing (with one-tap local scan import and zero impact on paired headphones/watches).
+- **Dual-Layer GMS Fused Location (Play Integrity Safe)**: Combines zero-crosstalk `WorkSource` attribution in `system_server` with process-scoped Zygisk `FusedLocationProvider` handling strictly inside the GMS location process — never touches `com.google.android.gms.unstable`, never requires adding GMS to LSPosed, and can be toggled off anytime in RF Settings for zero GMS footprint.
 - **Background Floating HUD & Screen-Capture Protection**: Edge-snapping floating capsule and expandable mini control panel that auto-appears when backgrounded, notification quick controls, and a dynamic `FLAG_SECURE` screen-capture hiding toggle.
 - **All-in-One Install, Boot-Guard, Diagnostics & Live Language Switch**: A single KernelSU module ZIP auto-installs the companion App and immediately reclaims storage, verifies strict cross-component version alignment, protects against bootloops via `boot-guard`, includes a built-in Diagnostics & Logs center (auto health checks + redacted log export), and supports instant Simplified Chinese / English switching.
 
@@ -58,7 +59,7 @@
 ## Quick Installation & Usage
 
 > [!IMPORTANT]
-> **NEVER check any target third-party app in LSPosed.** Kuroko Teleport isolates apps by UID inside system services — only System Framework, Phone Services, and optionally Bluetooth should be enabled.
+> **NEVER check any target third-party app or `com.google.android.gms` in LSPosed.** Kuroko Teleport isolates apps by UID inside system services (GMS Fused Location is handled automatically via `WorkSource` + process-scoped Zygisk) — only System Framework, Phone Services, and optionally Bluetooth should be enabled.
 
 1. **Flash the All-in-One Module ZIP**
    - Push `dist/kuroko-teleport-ksu-module.zip` to your device and install it in **KernelSU Manager → Modules → Install from local**.
@@ -131,9 +132,21 @@ Kuroko Teleport strictly preserves **zero target-app injection**, **per-UID isol
 </details>
 
 <details>
+<summary><strong>How does GMS Fused Location (FLP) work? Does it affect Play Integrity? What are the current boundaries?</strong></summary>
+
+Kuroko Teleport uses a **dual-layer design** for apps that rely on Google Play Services (GMS) Fused Location — **never check `com.google.android.gms` in LSPosed**:
+- **Layer 1**: Strict zero-crosstalk `WorkSource` attribution inside `system_server` covers single-client system/OEM/microG location proxies.
+- **Layer 2**: Zygisk hooks `FusedLocationProvider` strictly inside the GMS location process (`com.google.android.gms` / `.persistent`) per target UID and immediately unloads from `com.google.android.gms.unstable` (DroidGuard / Play Integrity), `.ui`, and all other apps. You can also toggle **GMS Fused Location Hook** off anytime in **Settings → RF Signal Simulation** for zero GMS footprint.
+- **Current Boundaries**:
+  1. **Zygisk Next DenyList**: If you enforce DenyList on `com.google.android.gms` / `.persistent` (blocking Zygisk module loading), Layer 2 will not load and gracefully falls back to Layer 1 (`WorkSource`).
+  2. **Scope**: Foreground/callback `FusedLocationProviderClient` (`requestLocationUpdates`, `getLastLocation`, `getCurrentLocation`, `LocationAvailability`) is fully covered; `PendingIntent`-based background Geofencing is not yet intercepted in `v0.7.0` and is planned as a follow-up.
+
+</details>
+
+<details>
 <summary><strong>How do I troubleshoot issues or report a bug?</strong></summary>
 
-Open **Settings → Diagnostics &amp; Logs** (or tap **View Logs** from the offline / version-lock dialog) to run the 6 built-in Auto Health Checks and inspect categorized logs. When opening a GitHub Issue, tap **Copy Summary** to paste the redacted Markdown report, and optionally attach the exported ZIP via **Share ZIP / Save ZIP** (auth tokens, API keys, routes/coordinates, and unrelated app logs are always stripped automatically, with target app package anonymization enabled by default).
+Open **Settings → Diagnostics &amp; Logs** (or tap **View Logs** from the offline / version-lock dialog) to run the 7 built-in Auto Health Checks (including optional Bluetooth &amp; GMS FLP status) and inspect categorized logs. When opening a GitHub Issue, tap **Copy Summary** to paste the redacted Markdown report, and optionally attach the exported ZIP via **Share ZIP / Save ZIP** (auth tokens, API keys, routes/coordinates, and unrelated app logs are always stripped automatically, with target app package anonymization enabled by default).
 
 </details>
 
@@ -141,12 +154,13 @@ Open **Settings → Diagnostics &amp; Logs** (or tap **View Logs** from the offl
 
 ## Roadmap / TODO
 
-- [x] System-side GPS / GNSS / NMEA, stationary pedometer & IMU sync, floating HUD, CHS/EN live switching, Release update checker, and redacted diagnostics export
+- [x] System-side GPS / GNSS / NMEA, stationary pedometer & IMU sync, floating HUD, CHS/EN live switching, Release update checker, and 7-check redacted diagnostics export
 - [x] Global geo-aware 4G/5G virtual cell tower & carrier/country code spoofing
 - [x] Virtual nearby Wi-Fi AP list, country code & custom AP spoofing
 - [x] Bluetooth / BLE scan isolation & custom iBeacon spoofing
+- [x] Dual-layer GMS FusedLocationProvider (FLP) & `WorkSource` attribution (Play Integrity safe)
 - [ ] Multi-device real-world verification & OEM ROM tuning on Android 12–16 (built-in `android-31` native baseline & multi-version sensor symbol matching already included)
-- [ ] GMS FusedLocationProvider (FLP) & `WorkSource` attribution support
+- [ ] `PendingIntent`-based GMS background Geofencing support
 - [ ] Health Connect & system step-counter ecosystem sync
 - [ ] GPX / KML route import & 360° floating joystick
 

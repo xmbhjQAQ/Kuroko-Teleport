@@ -17,6 +17,7 @@
 - **定点模拟与拟真轨迹运动**：内置开源地图（无 Google Play 依赖）、地名搜索、收藏点位库与可复用路线方案（支持 JSON 导入导出）；支持平滑弯道轨迹、循环/圈数/目标里程自动收尾、自然配速波动，以及手持摆臂 / 裤兜携带姿态切换。
 - **室内静止全链路计步与 IMU 同步**：即使手机平放室内桌面无真实卫星信号，也能稳定输出虚拟定位、多星座卫星/NMEA、单调递增步数与同源相位运动传感器数据；设置页内置「计步 / IMU 传感器自检」开箱即验。
 - **全维度射频信号仿真与防泄漏（基站 / Wi-Fi / 蓝牙 BLE）**：支持按目标应用一键选择 **全量拟真 / 严格隐藏 / 同城户外** 或独立微调蜂窝、Wi-Fi、蓝牙三态策略（透传 / 隐藏 / 伪造）；按全球坐标自动合成当地运营商 4G/5G 基站与国家码、区域合规 Wi-Fi 列表（含 802.11d 国家码与虚拟已连热点），以及蓝牙/BLE 扫描隔离与自定义 iBeacon 注入（支持一键导入周边实测信号与自定义固定点位，不影响已配对耳机/手表）。
+- **双层海外 GMS 融合定位支持（不伤 Play Integrity）**：系统框架 `WorkSource` 零串扰归因 + Zygisk 仅在 GMS 定位进程按 UID 接管 `FusedLocationProvider`（绝不接触 `com.google.android.gms.unstable`，且无需在 LSPosed 勾选 GMS）；可在「射频信号仿真」中一键关闭实现 GMS 零驻留。
 - **后台悬浮控制窗与防截屏保护**：支持切后台自动浮现的贴边迷你胶囊与展开控制台、通知栏快捷启停，以及动态 `FLAG_SECURE` 防截屏开关，无需反复切回主界面。
 - **All-in-One 一键刷入 · 自动防砖 · 诊断中心与双语切换**：单个 KernelSU 模块包自动安装配套 App 并即时回收存储空间；内置四端版本锁定校验、`boot-guard` 自动防砖、一键诊断与脱敏日志导出，以及简体中文 / English 实时切换（支持系统「应用语言」）。
 
@@ -58,7 +59,7 @@
 ## 快速安装与上手
 
 > [!IMPORTANT]
-> **切勿在 LSPosed 中勾选任何目标第三方 App**。Kuroko Teleport 通过系统服务层按 UID 分流生效，只需启用系统框架与电话服务（以及可选的蓝牙服务）即可。
+> **切勿在 LSPosed 中勾选任何目标第三方 App 或 `com.google.android.gms`**。Kuroko Teleport 通过系统服务层按 UID 分流生效（GMS 融合定位由 `WorkSource` 与进程隔离 Zygisk 自动处理），只需启用系统框架与电话服务（以及可选的蓝牙服务）即可。
 
 1. **刷入 All-in-One 模块包**
    - 将 `dist/kuroko-teleport-ksu-module.zip` 推送至手机，在 **KernelSU 管理器 → 模块 → 从本地安装** 中刷入。
@@ -131,9 +132,21 @@ Kuroko Teleport 严格遵循 **「目标 App 零注入 + 按 UID 隔离 + 不篡
 </details>
 
 <details>
+<summary><strong>海外 GMS 融合定位（FLP）如何工作？会影响 Play Integrity 吗？有哪些已知边界？</strong></summary>
+
+Kuroko Teleport 采用**双层架构**兼容依赖 Google Play Services（GMS）融合定位的应用，**绝对不要在 LSPosed 中勾选 `com.google.android.gms`**：
+- **第 1 层**：系统框架按 `WorkSource` 严格零串扰归因，覆盖单客户端系统/OEM/microG 代理。
+- **第 2 层**：Zygisk 仅在 GMS 定位进程（`com.google.android.gms` / `.persistent`）按目标 UID 接管 `FusedLocationProvider` 回调，在 `com.google.android.gms.unstable`（DroidGuard / Play Integrity）、`.ui` 及全部其他应用中立即自动卸载；也可在 **设置 → 射频信号仿真** 中随时关闭「GMS 融合定位接管」实现零驻留。
+- **已知边界**：
+  1. 若你在 **Zygisk Next 排除列表（DenyList）** 中屏蔽了 `com.google.android.gms` / `.persistent`（阻止模块加载），第 2 层将不会加载，自动优雅回退至第 1 层（`WorkSource`）。
+  2. 前台/回调型 `FusedLocationProviderClient`（`requestLocationUpdates`、`getLastLocation`、`getCurrentLocation`、`LocationAvailability`）已完整覆盖；基于 `PendingIntent` 的后台地理围栏（Geofencing）在 `v0.7.0` 暂未拦截，已列入后续计划。
+
+</details>
+
+<details>
 <summary><strong>遇到问题如何自查或提交 Bug 反馈？</strong></summary>
 
-打开应用内 **设置 → 诊断与日志**（或在引擎离线/版本锁定弹窗中点击 **查看诊断日志**），即可运行 6 项自动体检并分标签查看诊断日志。提交 GitHub Issue 时，请点击 **「复制摘要」** 粘贴脱敏 Markdown 摘要，必要时通过 **「分享诊断包 / 保存文件」** 附带导出 ZIP（鉴权令牌、地图 Key、路线坐标与无关应用日志均会自动脱敏，且默认匿名化目标 App 包名）。
+打开应用内 **设置 → 诊断与日志**（或在引擎离线/版本锁定弹窗中点击 **查看诊断日志**），即可运行 7 项自动体检（含可选蓝牙与 GMS 融合定位状态）并分标签查看诊断日志。提交 GitHub Issue 时，请点击 **「复制摘要」** 粘贴脱敏 Markdown 摘要，必要时通过 **「分享诊断包 / 保存文件」** 附带导出 ZIP（鉴权令牌、地图 Key、路线坐标与无关应用日志均会自动脱敏，且默认匿名化目标 App 包名）。
 
 </details>
 
@@ -141,12 +154,13 @@ Kuroko Teleport 严格遵循 **「目标 App 零注入 + 按 UID 隔离 + 不篡
 
 ## 计划功能（TODO）
 
-- [x] 系统侧 GPS / GNSS / NMEA、室内静止计步与 IMU 同步、后台悬浮控制窗、中英双语切换、Release 更新检查及脱敏诊断日志导出
+- [x] 系统侧 GPS / GNSS / NMEA、室内静止计步与 IMU 同步、后台悬浮控制窗、中英双语切换、Release 更新检查及 7 项体检脱敏诊断导出
 - [x] 全球地理感知虚拟 4G/5G 蜂窝基站与运营商/国家码伪造
 - [x] 虚拟周边 Wi-Fi 列表、国家码与自定义热点伪造
 - [x] 蓝牙 / BLE 扫描隔离与自定义 iBeacon 伪造
+- [x] 双层海外 GMS 融合定位提供器（FLP）与 `WorkSource` 归因支持（Play Integrity 安全）
 - [ ] Android 12–16 多机型真机验证与厂商 ROM 适配完善（已内置 `android-31` 编译基线与多版本传感器符号匹配）
-- [ ] 海外 GMS 融合定位提供器（FLP）与 `WorkSource` 归因支持
+- [ ] 基于 `PendingIntent` 的 GMS 后台地理围栏（Geofencing）拦截支持
 - [ ] Health Connect 与系统计步聚合生态同步
 - [ ] GPX / KML 轨迹导入与 360° 悬浮方向摇杆
 

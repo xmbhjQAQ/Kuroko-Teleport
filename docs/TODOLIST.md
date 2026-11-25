@@ -37,12 +37,13 @@
 
 ---
 
-## 四、 Zygisk Native 传感器引擎与 All-in-One 双语模块打包（`native/zygisk/`, `module_template/`, `build_module.py` · `v0.7.0`）
+## 四、 Zygisk Native 传感器 / GMS 引擎与 All-in-One 双语模块打包（`native/zygisk/`, `module_template/`, `build_module.py` · `v0.7.0`）
 
-- [x] 配置 `module_template/sepolicy.rule` 完整覆盖 `zygote` / `system_server` / `radio` / `bluetooth` 四域只读 `memfd` 与 Binder 策略
+- [x] 配置 `module_template/sepolicy.rule` 完整覆盖 `zygote` / `system_server` / `radio` / `bluetooth` / `gmscore_app`（严格只读 `memfd`）五域策略（37 条单类型 KSU 兼容规则）；`post-fs-data.sh` 在 `zygote` 启动前同步清理过期 `/data/adb/kuroko/gms_status` 且永不删除用户偏好 `/data/adb/kuroko/gms_disabled`
 - [x] 彻底消除 Android 17 Zygisk Next 隔离 linker namespace 双副本陷阱：`arm64-v8a.so` **零 C `dlopen` 导入**，主路径经 JNI `java.lang.System.load` 加载至 `default` 命名空间并执行纯 PLT Hook；`StepInjectorThread` 内置纯 C++ ARM64 ELF64 `.rela.plt` GOT 自愈看门狗（`.rela.plt` 预过滤防注册不存在符号、`CONN_C1 | SEND_EVENTS` 预检核心门禁、静态生命期 `g_plt_orig_slots[SPEC_COUNT]` 无条件同步 + 全包装函数 `load_orig_for_slot` 回退、`PROT_EXEC` 重定位守卫、`.dynstr` 边界校验、`sysconf(_SC_PAGESIZE)` 页对齐 `mprotect`）
 - [x] 升级三层多句柄发现覆盖 Non-wakeup/Wakeup 双句柄，在 `hook_save_sensor_usage_item` 过滤 `arg4 >= 0` 哨兵污染；覆写 8 类连续传感器（含 `TYPE_ORIENTATION (3)`）与 40Hz 单调计步注入；嵌入 `mv=13` 实时遥测（`kuroko.sensor.hook` / `kuroko.sensor.diag`）
 - [x] 跨版本兼容基线加固：Native NDK 编译目标下探至 `android-31`（Android 12+，零 API>31 Bionic 符号依赖）；`sensor_hook.cpp` 升级为 ABI 安全的 20 变体 `HookSlot` 多版本 Android 12–17 候选符号表（5 核心 + 3 发现位掩码去重，各参数个数变体独立精确签名包装与 `std::atomic` 原指针防 AAPCS64 栈参截断，未命中时 `LOGW` 自动打印 `.rela.plt` 候选符号供未知 OEM 排查）
+- [x] 新增 **Layer 2 进程隔离 GMS FLP 引擎（`native/zygisk/gms_hook.{h,cpp}` + `module.cpp` Companion cmd 2/3）**：`preAppSpecialize` 对 `com.google.android.gms.unstable`（Play Integrity / DroidGuard）、`.ui` 及全部其他应用无条件 `DLCLOSE_MODULE_LIBRARY`；仅 `com.google.android.gms` / `com.google.android.gms.persistent` 映射只读 `g_memfd_ro`（支持 `SET_GMS 0` 随时零驻留关闭），以纯 C++ ELF64 解析 + `PT_GNU_RELRO` 原子 Vtable 替换（零 Inline Hook、零 `dlopen`、16KB + BTI/PAC 安全）在 AIDL 线层按内核 `calling_uid` 接管 `IGoogleLocationManagerService` 与出站 `ILocationCallback` / `ILocationListener` / `ILocationStatusCallback`，经 JNI 构造洁净 `Location`（`isMock=false`）并内置 `Kuroko-1Hz-GMS` 主动推包泵（850ms 去重）；守护进程通过 `/proc/<pid>/cmdline` 校验存活并在 `STATUS` 上报可选 `gms_shm`/`gms_enabled`/`gms_diag`（支持 TCP `SET_GMS <0|1>`）
 - [x] 配置可扩展多语言安装器与模块元数据：`module.prop`（`id=kuroko_teleport`、`name=Kuroko Teleport`、`author=Kuroko Teleport`，构建/Release 阶段动态注入 KernelSU `updateJson`）；`module_template/lang/{en,zh}.sh`（16 对称键，含 `MOD_DESC` 及可选 `com.android.bluetooth` 提示）；`customize.sh` 通用 BCP-47 级联加载动态改写 `$MODPATH/module.prop` `description` 后清理 `$MODPATH/lang/` 与 `$MODPATH/apk/`
 - [x] 落实 All-in-One 策略 A1/A2/A4（SHA-256 验签、流式 `pm install -r -d -S`、PMS 离线暂存 `/data/adb/kuroko/pending_apk/` 由 `service.sh` 补装、签名冲突与 `uninstall.sh` 严禁 `pm uninstall` 保护用户路线）
 - [x] 跨平台构建与 CI/Release 工程化：`build_module.py` / `native/build_native.py` 动态探测 SDK/NDK/CMake/Ninja/LLVM，配合 `scripts/audit_i18n.py`、`.github/workflows/{ci,release}.yml`（含 `update.json` 发布）与 `.github/ISSUE_TEMPLATE/bug_report.yml` 产出并审计 `dist/kuroko-teleport-ksu-module.zip`（16KB + BTI/PAC + 零 `libc++_shared.so` + 零 `dlopen`）
@@ -51,9 +52,9 @@
 
 ## 五、 LSPosed 系统侧模块（`app/src/main/java/com/kuroko/teleport/xposed/` · `v0.7.0`）
 
-- [x] 配置单 APK 集成的 Xposed 元数据（`xposedmodule=true`、`xposedminversion=93`、`xposedscope=@array/xposed_scope` 严格限定为系统组件 `android`、`com.android.phone` 及可选的 `com.android.bluetooth`，`assets/xposed_init` 声明 `com.kuroko.teleport.xposed.KurokoXposedEntry`，双语 `xposed_description`，目标 App 零注入）
+- [x] 配置单 APK 集成的 Xposed 元数据（`xposedmodule=true`、`xposedminversion=93`、`xposedscope=@array/xposed_scope` 严格限定为系统组件 `android`、`com.android.phone` 及可选的 `com.android.bluetooth`，严禁勾选 `com.google.android.gms` 或目标 App，`assets/xposed_init` 声明 `com.kuroko.teleport.xposed.KurokoXposedEntry`，双语 `xposed_description`，目标 App 零注入）
 - [x] 升级 `ShmReader.kt` 至 `KurokoShm v2`（`KUROKO_SHM_VERSION=2`，新增 `readRfHeader`/`readCells`/`readWifiAps`/`readBleDevices`、`cachedBluetoothBinder` 与仅 Root UID 0 的 `KUROKO_BINDER_TX_GET_BT_BINDER` 桥接，回传 `sensorOk` + `xp=13` 前缀 `sensor_diag`）
-- [x] 实现 `LocationHook.kt`（1Hz 主动推包泵）、`HyperOsHook.kt`（HyperOS 4 豁免）
+- [x] 实现 `LocationHook.kt`（1Hz 主动推包泵 + **Layer 1 严格零串扰 `WorkSource`/`AttributionSource` 归因**：仅当代理请求的 `WorkSource` 非空且其中全部应用 UID 均启用 `KUROKO_POLICY_LOCATION` 时才在 `system_server` 接管，覆盖 AOSP/OEM/microG 单客户端代理且绝不污染共享多客户端请求）、`HyperOsHook.kt`（HyperOS 4 豁免）
 - [x] 新增 `VirtualCellBuilder.kt` 并升级 `TelephonyHook.kt`：在 `com.android.phone`（`PhoneInterfaceManager` + `ISub` `SubscriptionManagerService`/`SubscriptionController`）与 `system_server`（`TelephonyRegistry` + `Kuroko-1Hz-Tel` 主动热切换泵）按 UID 支持三态策略（透传 / 隐藏 / `SPOOF_CELL` 虚拟 4G/5G `CellInfoLte`/`CellInfoNr`、`GsmCellLocation`、克隆改写 `ServiceState` 与 `NetworkRegistrationInfo.mRplmn` 及可选 `SubscriptionInfo` 改写），并明确文档化进程内直读 `/dev/__properties__` `gsm.*` 快捷方法的零注入边界
 - [x] 新增 `VirtualWifiBuilder.kt` 并升级 `WifiConnectivityHook.kt`：在 APEX `service-wifi.jar` 与 `service-connectivity.jar` 按 UID 支持三态策略（透传 / 隐藏 / `SPOOF_WIFI` 虚拟 `ScanResult` + 802.11d Country IE + `getCountryCode` + 可选虚拟已连 `WifiInfo`）
 - [x] 新增 `BluetoothHook.kt` 并接入 `KurokoXposedEntry.kt`：`system_server` 捕获 `service-bluetooth.jar` 暴露的远程 Binder 缓存至 `ShmReader`；`com.android.bluetooth`（`/apex/com.android.bt`）同时 Hook `AdapterBinder`（`IAdapter`）与 `AdapterServiceBinder`（`IBluetooth`）接收 `g_memfd_ro`，在 `ScanController`/`ScanBinder`/`ScannerMap`（及 Android 12–15 `GattService` 回退）与 `RemoteDevices` 实现按 UID 抑制真实 BLE/经典蓝牙发现及 1Hz 虚拟 BLE / iBeacon 注入（零影响已配对设备）
@@ -67,22 +68,22 @@
 - [x] 配置全平台应用与状态栏图标资源（Android 13–17 Adaptive + Monochrome、`mipmap-anydpi-v26`、`mdpi`–`xxxhdpi` 兼容 PNG 与前台保活通知栏 `24dp` 矢量图标 `ic_stat_kuroko.xml`）
 - [x] 实现注册表驱动 `AppLocaleManager.kt`（`kuroko_locale_prefs` + `SupportedLanguage` 母语自称 + API 33+ `LocaleManager` / API 31–32 回退 + `com.kuroko.teleport.overlay.ACTION_REFRESH_LOCALE` + `daemon.setLang` 同步）、`SettingsDialog.kt` 可扩展 `FlowRow` 语言选择器、`FloatingOverlayService`（`kuroko_hud_channel`）`disposeComposition()` 实时换语重建、`RouteStore`/`PointStore`（`kuroko_store_v1`、`kuroko_route`/`kuroko_points`、`builtInKey` 预设本地化）与 `GeocoderClient` 动态 BCP-47 `accept-language`
 - [x] 实现 Release 专用更新检查（`v0.6.3`：`update/UpdateChecker.kt`、`ui/UpdateDialog.kt`，接入 `MainActivity` 与 `SettingsDialog`）及 KernelSU `updateJson` 静态更新通道
-- [x] 实现全球射频配置中心、实测信号导入与三态策略 UI（`v0.7.0`）：`rf/RfConfigStore.kt`（`kuroko_rf_v1` JSON 持久化与导入导出）、`rf/RfLiveImporter.kt`（一键导入当前周边实测基站/Wi-Fi/BLE iBeacon 及按需可选 OpenCelliD 查询）、`ui/RfConfigDialog.kt`（实时射频遥测、全局开关、区域运营商预设与 3 标签固定点位编辑）、`ui/TargetAppSheet.kt`（全量拟真/严格隐藏/同城户外三预设 + 蜂窝/Wi-Fi/蓝牙三态微调 + 蓝牙作用域提示），`KurokoRuntime`/`DaemonClient` 连接自动同步 IPC v3 且保持 `btShm` 可选不锁模拟
-- [x] 实现零常驻后台的 **应用内诊断与日志中心（`v0.6.2` / `v0.7.0` 升级）**：400 条内存事件环形缓冲 `diag/AppLogBuffer.kt`、5 源有界按需采集器（两阶段 `logcat`、零误报 `isEngineRelevantAvc` 含 `bluetooth` 域、严格防跨模块 LSPosed 白名单、精确 ELF 实例数解析）+ 强制隐私脱敏（含 OpenCelliD Token 脱敏）+ 本地自动体检（含可选蓝牙钩子 `B` 检查）`diag/DiagnosticCollector.kt`、Braun 新拟态 `ui/DiagnosticsDialog.kt`、严格限定 `cache/diagnostics/` 的 `FileProvider` + SAF 6 文件脱敏 ZIP 导出
+- [x] 实现全球射频配置中心、实测信号导入、GMS 开关与三态策略 UI（`v0.7.0`）：`rf/RfConfigStore.kt`（`kuroko_rf_v1` JSON 持久化与导入导出）、`rf/RfLiveImporter.kt`（一键导入当前周边实测基站/Wi-Fi/BLE iBeacon 及按需可选 OpenCelliD 查询）、`ui/RfConfigDialog.kt`（实时射频遥测含可选 `GMS G✓/G-` 徽章、全局开关含 `SET_GMS` 零驻留开关、区域运营商预设与 3 标签固定点位编辑）、`ui/TargetAppSheet.kt`（全量拟真/严格隐藏/同城户外三预设 + 蜂窝/Wi-Fi/蓝牙三态微调 + 蓝牙作用域提示），`KurokoRuntime`/`DaemonClient` 连接自动同步 IPC v3 且保持 `btShm`/`gmsShm` 均可选不锁模拟
+- [x] 实现零常驻后台的 **应用内诊断与日志中心（`v0.6.2` / `v0.7.0` 升级至 7 项自动体检）**：400 条内存事件环形缓冲 `diag/AppLogBuffer.kt`、5 源有界按需采集器（两阶段 `logcat` 含 `KurokoGmsHook`、零误报 `isEngineRelevantAvc` 含 `bluetooth` 与 `gmscore_app` 域、严格防跨模块 LSPosed 白名单、精确 ELF 实例数解析、脱敏采集 GMS 进程名/SELinux 域与 `gms_status`/`gms_disabled`）+ 强制隐私脱敏（含 OpenCelliD Token 脱敏）+ **7 项本地自动体检**（含可选蓝牙 `B` 与可选 GMS 融合定位 `G` 检查，无 GMS 机型静默通过不误报）`diag/DiagnosticCollector.kt`、Braun 新拟态 `ui/DiagnosticsDialog.kt`、严格限定 `cache/diagnostics/` 的 `FileProvider` + SAF 6 文件脱敏 ZIP 导出
 - [x] 完整实现 Braun 亮色新拟态双栏地图（`KurokoControllerScreen`、`KurokoMapController`、`KurokoLightColors`）、持久化拖拽弹簧底栏、三层场景方案记忆、后台悬浮控制窗（`specialUse` + `FLAG_SECURE`）、设置页内置「计步 / IMU 传感器自检」及全链路四端严格版本锁定状态机（`KurokoRuntime` + `KurokoProtocol`）
 
 ---
 
 ## 七、 工程文档与社区模板（`README.md`, `README_EN.md`, `docs/`, `.github/`）
 
-- [x] 维护 `README.md`（简体中文用户向主页）与 `README_EN.md`（英文用户向主页），同步全球射频仿真（基站/Wi-Fi/BLE）、可选 `com.android.bluetooth` 作用域说明、精简核心 TODO 与社区支持
-- [x] 维护 `docs/ARCHITECTURE.md`（同步 `KurokoShm v2` 16KB 布局、`RfSynthesizer`、偶极子地磁模型、蓝牙 APEX Hook 与 `KUROKO_BINDER_TX_GET_BT_BINDER` 桥接、TCP IPC v3 及应用内诊断中心）
+- [x] 维护 `README.md`（简体中文用户向主页）与 `README_EN.md`（英文用户向主页），同步全球射频仿真（基站/Wi-Fi/BLE）、双层 GMS FLP 与 Play Integrity/DenyList/Geofencing 边界说明、7 项诊断体检、可选 `com.android.bluetooth` 作用域、精简核心 TODO 与社区支持
+- [x] 维护 `docs/ARCHITECTURE.md`（同步 `KurokoShm v2` 16KB 布局、`RfSynthesizer`、偶极子地磁模型、蓝牙 APEX Hook、双层 GMS FLP 架构与已知边界 §7.1、TCP IPC v3 及 7 项诊断中心）
 - [x] 维护 `docs/ROADMAP.md`（同步 `v0.6.3` / `v0.7.0` 里程碑与各阶段演进规划）与 `docs/TODOLIST.md`（本可勾选追踪清单）
 - [x] 维护双语 GitHub Issue 反馈表单 `.github/ISSUE_TEMPLATE/bug_report.yml` 与 CI/Release 工作流 `.github/workflows/{ci,release}.yml`
 
 ---
 
-## 八、 Phase 1 与 `v0.7.0` 射频真机联合验收清单
+## 八、 Phase 1 与 `v0.7.0` 射频 / GMS 真机联合验收清单
 
 - [x] **Phase 1 基础部署、LBS、计步、多语言与诊断中心全链路验收（✅ 已完成）**
   - [x] KSU2 模块与主控 APK 零 Bootloop 顺利进桌面，LSPosed 仅勾选系统组件（零目标 App 注入）
@@ -92,6 +93,10 @@
   - [x] 刷入 `v0.7.0(13)` All-in-One 模块包，验证四端版本对齐（`v0.7.0(13) · P3 · SHM2`）且未启用或未勾选 `com.android.bluetooth` 时正常放行模拟不误锁
   - [x] 在 LSPosed 可选启用 `com.android.bluetooth` 并重启，验证双描述符（`IAdapter` / `IBluetooth`）`KUROKO_BINDER_TX_GET_BT_BINDER` 桥接成功（`B✓`、`bt_shm=1`）且诊断中心零 `bluetooth` SELinux AVC 拦截
   - [x] 实测跨国/跨区坐标下虚拟 4G/5G 基站（LTE/NR 服务与邻区小区）、`ServiceState` 1Hz 热切换（无需重启目标 App 即时刷新运营商与 MCC/MNC）及开启本地 SIM 同步后的 `ISub` `SubscriptionInfo` 改写，已配对蓝牙设备连接不受干扰（Wi-Fi 列表与自定义 iBeacon 现场导入待按需抽测）
+- [ ] **`v0.7.0` 双层 GMS FusedLocationProvider (FLP) 真机回归验收（待用户实机验证）**
+  - [ ] 确认未在 LSPosed 勾选 `com.google.android.gms` 且 `com.google.android.gms.unstable` 零驻留（Play Integrity 不受影响），核验射频设置顶栏 `GMS G✓` 与诊断中心第 7 项 `GMS 融合定位钩子` 正常、零 `gmscore_app` SELinux AVC 拦截
+  - [ ] 实测依赖 `FusedLocationProviderClient`（`requestLocationUpdates` / `getLastLocation` / `getCurrentLocation` / `LocationAvailability`）的海外地图与定位应用：验证室内静止 1Hz 持续推送且非目标应用、GMS 缓存与 Find My Device 零串扰
+  - [ ] 验证「射频信号仿真 → GMS 融合定位接管」关闭（`SET_GMS 0`）重启后 GMS 零驻留，以及 Zygisk Next DenyList 阻止 GMS 加载时优雅回退至 Layer 1（`WorkSource`）
 
 ---
 
@@ -103,10 +108,11 @@
 - [ ] 在 Android 12–16 多机型与第三方 OEM ROM 上开展社区真机验证（收集诊断包补齐潜在非标 OEM 符号变体），完善 `sensors_event_t` 运行时校验与非特定 OEM 下的 AOSP 一级/三级计步句柄发现回退验证
 - [ ] 保持现有 HyperOS 豁免逻辑解耦运行，调研并补充主流 ROM（ColorOS、OriginOS、One UI、Pixel/AOSP）的定位代理、省电冻结与模糊定位可选弱绑定适配钩子
 
-### 2. 海外 GMS FusedLocationProvider (FLP) / `WorkSource` 适配（Phase 2）
+### 2. 海外 GMS FusedLocationProvider (FLP) / `WorkSource` 适配（Phase 2 · ✅ 核心双层已落地 `v0.7.0`）
 
-- [ ] 在 `LocationHook.kt` 中解析 `LocationRequest.getWorkSource()` 与 `AttributionSource` 调用链，实现经由 `com.google.android.gms` 代理转发请求的真实调用方 UID 归因与多客户端分流隔离
-- [ ] 评估并实现 GMS FLP 按包缓存（`lastLocation` / `LocationAvailability`）与 `Geofencing` 回调隔离（全程维持目标 App 零注入）
+- [x] **Layer 1（`system_server` `LocationHook.kt`）**：解析 `LocationRequest.getWorkSource()` 与 `AttributionSource` 调用链，实现严格零串扰归因（仅当全部应用 UID 均开启 `KUROKO_POLICY_LOCATION` 时接管系统/OEM/microG 代理，绝不污染混合多客户端请求）
+- [x] **Layer 2（`kuroko_zygisk` `gms_hook.{h,cpp}`）**：仅在 `com.google.android.gms` / `.persistent` 进程通过纯原子 Vtable 替换在 AIDL 线层按内核 `calling_uid` 接管前台/回调型 `FusedLocationProviderClient`（`requestLocationUpdates`/`getLastLocation`/`getCurrentLocation`/`LocationAvailability`）+ 1Hz 主动推包泵（`.unstable` 无条件 `DLCLOSE`，支持 `SET_GMS 0` 零驻留关闭与 7 项诊断体检）
+- [ ] 扩展支持基于 `PendingIntent` 的 GMS 后台地理围栏（Geofencing）拦截
 - [ ] （可选进阶）研究同源开普勒星历伪距与多普勒频移 `GnssMeasurements` 合成，替代当前降级抑制策略
 
 ### 3. 虚拟蜂窝基站伪造（Virtual Cell Tower Spoofing · ✅ 已完成，`v0.7.0`）

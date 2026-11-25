@@ -5,8 +5,8 @@
 ```mermaid
 flowchart LR
     P0["Phase 0\n真机探针与基线锁定\n(已完成)"]
-    P1["Phase 1 (v0.7.0 All-in-One)\nLBS + 跑步 + 悬浮 HUD + 多语言 +\n诊断中心 + 全球射频(基站/Wi-Fi/BLE)\n(核心完成)"]
-    P2["Phase 2\n多版本 Android 12-16 真机验证\n+ 海外 GMS FLP / WorkSource"]
+    P1["Phase 1 (v0.7.0 All-in-One)\nLBS + 跑步 + 悬浮 HUD + 多语言 +\n7项诊断 + 全球射频 + 双层 GMS FLP\n(核心完成)"]
+    P2["Phase 2\n多版本 Android 12-16 真机验证\n+ GMS PendingIntent 围栏"]
     P3["Phase 3\n微信/支付宝/系统健康\nSteps & Health Connect"]
     P4["Phase 4\nGPX/KML / 360° 悬浮摇杆 /\n贴路规划 / 可选 LSPlant"]
 
@@ -57,23 +57,25 @@ flowchart LR
     - **协议与共享内存升级（`SHM=2` / `IPC=3`）**：`KurokoShm v2` 在 16KB 页内新增 `KurokoRfHeader`、`KurokoCell[8]`、`KurokoWifiAp[16]`、`KurokoBleDevice[16]`；新增 4 组策略位（`SPOOF_WIFI`/`SPOOF_CELL`/`HIDE_BLE`/`SPOOF_BLE`）与 3 预设（全量拟真 `0x3E7` / 严格隐藏 `0x13F` / 同城户外 `0x02F`）；TCP IPC v3 新增 `SET_RF_CONFIG`/`SET_RF_CELLS`/`SET_RF_WIFIS`/`SET_RF_BEACONS` 并扩展 `STATUS` 射频遥测。
     - **全球射频与地磁合成引擎**：`RfSynthesizer`（`native/daemon/rf_synth.{h,cpp}`）内置覆盖全球主流地区的运营商 MCC/MNC、4G/5G 频段与 Wi-Fi 法规信道表，1Hz 合成时空连续基站（Cost-231 衰落 + 3 dB 切换迟滞）、微网格 Wi-Fi AP 列表与 30B Apple `0x004C` iBeacon 广播；`sim_engine.cpp` 升级南北半球精确的纬度感知偶极子地磁模型。
     - **三进程系统侧射频 Hook**：`VirtualCellBuilder.kt` + `TelephonyHook.kt`（虚拟 LTE/NR `CellInfo`、`ServiceState` 含 `NetworkRegistrationInfo.mRplmn`、`Kuroko-1Hz-Tel` 跨区热切换与 `IOnSubscriptionsChangedListener` 主动推送，以及 `ISub` `SubscriptionManagerService`/`SubscriptionController` 按 UID 改写 `SubscriptionInfo`）；`VirtualWifiBuilder.kt` + `WifiConnectivityHook.kt`（虚拟 `ScanResult` + 802.11d Country IE + `getCountryCode` + 虚拟已连 `WifiInfo`）；`BluetoothHook.kt`（`system_server` `service-bluetooth.jar` 缓存远程 Binder 经仅 Root `KUROKO_BINDER_TX_GET_BT_BINDER` 桥接至 `com.android.bluetooth` `/apex/com.android.bt`，双兼容 Android 17 `IAdapter` 与 `IBluetooth`，实现按 UID 抑制真实 BLE/经典蓝牙发现与 1Hz 虚拟 iBeacon 注入，`bt_shm` 可选绝不锁死模拟）；并在文档明确记录零注入边界（进程内直读 `/dev/__properties__` `gsm.*` 的 6 个 `TelephonyManager` 快捷方法刻意不改写）。
-    - **主控端配置与实测导入**：新增 `RfConfigStore`、`RfLiveImporter`（一键导入当前周边实测基站/Wi-Fi/BLE iBeacon 及按需可选 OpenCelliD 查询）、`TargetAppSheet` 三态微调与 `RfConfigDialog`，并在诊断中心集成蓝牙钩子检查（`B`）与 OpenCelliD Token 脱敏。
-- **阶段收口验收（✅ Phase 1 与 `v0.7.0` 核心射频实机已通过）**：
-  - Phase 1 全链路已在 Android 17 测试设备验收通过；`v0.7.0` 四端版本对齐、`L✓ P✓ S✓ B✓`（含零 `bluetooth` AVC）、跨国/跨区 4G/5G 基站、`ServiceState` 热切换与 `ISub` 本地 SIM 订阅改写均已实机验收通过。
+    - **主控端配置与实测导入**：新增 `RfConfigStore`、`RfLiveImporter`（一键导入当前周边实测基站/Wi-Fi/BLE iBeacon 及按需可选 OpenCelliD 查询）、`TargetAppSheet` 三态微调与 `RfConfigDialog`（含可选 `GMS G✓/G-` 徽章与 `SET_GMS` 零驻留开关），并在诊断中心升级为 **7 项自动体检**（集成可选蓝牙 `B` 与可选 GMS 融合定位 `G` 检查、`KurokoGmsHook` 抓取、`gmscore_app` AVC 过滤与 OpenCelliD Token 脱敏）。
+    - **双层海外 GMS 融合定位（FLP）与 Play Integrity 保护**：**Layer 1**（`LocationHook.kt` 严格零串扰 `WorkSource` 归因，仅在全部应用 UID 均命中 `KUROKO_POLICY_LOCATION` 时接管系统/OEM/microG 代理）；**Layer 2**（`kuroko_zygisk` `gms_hook.{h,cpp}` 严禁在 LSPosed 勾选 GMS，对 `com.google.android.gms.unstable`/`.ui`/其他应用无条件 `DLCLOSE`，仅在 `com.google.android.gms` / `.persistent` 通过 `PT_GNU_RELRO` 纯原子 Vtable 替换在 AIDL 线层按内核 `calling_uid` 接管 `IGoogleLocationManagerService` 与出站 `ILocationCallback`/`ILocationListener`/`ILocationStatusCallback`，JNI 构造洁净 `Location` 且内建 1Hz 室内主动推包泵 `Kuroko-1Hz-GMS`，零污染 GMS 缓存/CHRE/Find My Device）。
+- **阶段收口验收（✅ Phase 1 与 `v0.7.0` 核心射频实机已通过 · GMS 真机回归待测）**：
+  - Phase 1 全链路已在 Android 17 测试设备验收通过；`v0.7.0` 四端版本对齐、`L✓ P✓ S✓ B✓`（含零 `bluetooth` AVC）、跨国/跨区 4G/5G 基站、`ServiceState` 热切换与 `ISub` 本地 SIM 订阅改写均已实机验收通过；双层 GMS FLP 待在含 GMS 环境下完成真机回归验收。
 
 ---
 
-## Phase 2：多版本 Android 12–17 泛化与海外 GMS FLP 适配（📋 规划中）
+## Phase 2：多版本 Android 12–17 泛化与海外 GMS FLP 进阶适配（🚧 进行中）
 
-**目标**：将 Native 传感器/计步引擎从当前已实测的 Android 17 扩展至 **Android 12–17 (API 31–37)** 主流版本与多厂商 ROM，并解决海外依赖 Google Play Services (`com.google.android.gms`) 融合定位提供器（FLP）的地图与运动类应用间接请求定位时的归因与缓存串扰问题。
+**目标**：将 Native 传感器/计步引擎从当前已实测的 Android 17 扩展至 **Android 12–17 (API 31–37)** 主流版本与多厂商 ROM，并完善海外 Google Play Services (`com.google.android.gms`) 融合定位与后台地理围栏场景。
 
 - **轨道 1：多版本 Android 12–17 传感器 ABI 与多 ROM 泛化**
   1. **多版本 `libsensorservice.so` 符号表与 `android-31` 编译基线（✅ 代码基线已落地 · 待社区多机型真机验证）**：Native NDK 构建目标已下探至 `android-31`（零 API>31 Bionic 依赖），`native/zygisk/sensor_hook.cpp` 已引入覆盖 API 31–37 的 `HookSlot` 候选符号表（各参数变体独立精确签名包装 + 位掩码去重计数 + 未知 OEM 符号 `LOGW` 自动转储）；后续将结合社区在 Android 12–16 多机型导出的脱敏诊断包持续补齐非标 OEM 符号变体与运行时偏移校验。
   2. **跨厂商 ROM 可选适配模块**：在保持现有 HyperOS 豁免模块独立运行的前提下，补充其他主流 ROM（AOSP / Pixel、ColorOS、OriginOS、One UI 等）的定位代理、省电冻结与模糊定位可选适配钩子，全部做到反射弱绑定、按类存在性静默按需启用。
-- **轨道 2：海外 GMS FusedLocationProvider (FLP) / `WorkSource` 深度适配**
-  1. **`WorkSource` / `AttributionSource` 归因解析**：当目标 App 经由 `com.google.android.gms` 请求底层 `LocationProviderManager` 时，`CallerIdentity.uid` 为 GMS 自身 UID，实际发起方位于 `LocationRequest.getWorkSource()`（或 `AttributionSource` 链）中。在 `system_server` 侧增加多 UID `WorkSource` 拆分识别与回调隔离逻辑，避免污染其他非目标 GMS 客户端。
-  2. **GMS 缓存与回调隔离**：评估在 `system_server` FLP Provider 桥接层或受控 GMS 代理边界拦截 `FusedLocationProvider` 的按包缓存（`lastLocation` / `LocationAvailability`）与 `Geofencing` 回调，全程保持目标 App 零注入。
-  3. **高阶 `GnssMeasurements` 原始观测合成（可选）**：针对校验原始伪距、载波相位与 `GnssClock` 的极严风控 App，升级当前“安全抑制降级”策略为同源开普勒星历伪距与多普勒频移合成器。
+- **轨道 2：海外 GMS FusedLocationProvider (FLP) / `WorkSource` 深度适配（✅ 核心双层已落地 `v0.7.0` · 待真机回归与围栏扩展）**
+  1. **Layer 1 严格零串扰 `WorkSource` 归因（✅ 已完成，`v0.7.0`）**：`LocationHook.kt` 完整解析 `WorkSource` / `AttributionSource` 调用链，仅在所有应用 UID 均启用 `KUROKO_POLICY_LOCATION` 时接管代理注册，彻底避免混合多客户端串扰。
+  2. **Layer 2 进程隔离 GMS AIDL 线层接管与 Play Integrity 保护（✅ 已完成，`v0.7.0` · 待实机回归验收）**：`kuroko_zygisk` `gms_hook.{h,cpp}` 仅在 `com.google.android.gms` / `.persistent` 驻留（对 `.unstable` 无条件卸载，支持 `SET_GMS 0` 零驻留关闭），纯原子 Vtable 替换完整覆盖前台/回调型 `FusedLocationProviderClient`（`requestLocationUpdates`/`getLastLocation`/`getCurrentLocation`/`LocationAvailability`）与 1Hz 室内主动推包；**已知边界**：若 Zygisk Next DenyList 阻止 GMS 进程加载模块则优雅回退至 Layer 1。
+  3. **`PendingIntent` 后台地理围栏（Geofencing）拦截（📋 规划中）**：后续版本扩展支持基于 `PendingIntent` 的 GMS 后台定位与地理围栏投递。
+  4. **高阶 `GnssMeasurements` 原始观测合成（可选）**：针对校验原始伪距、载波相位与 `GnssClock` 的极严风控 App，升级当前“安全抑制降级”策略为同源开普勒星历伪距与多普勒频移合成器。
 
 ---
 
