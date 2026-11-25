@@ -73,12 +73,12 @@ jobs:
       - name: Audit version contract, Android XML i18n & shell lang packs
         run: python3 scripts/audit_i18n.py
 
-      - name: Build Debug Controller/LSPosed APK (CI channel, update check disabled)
+      - name: Run JVM unit tests & build Debug Controller/LSPosed APK (CI channel, update check disabled)
         env:
           KUROKO_BUILD_CHANNEL: ci
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleDebug
+          ./gradlew :app:testDebugUnitTest :app:assembleDebug
 
       - name: Build & ELF/ZIP audit All-in-One KSU2/Zygisk module (CI channel, no updateJson)
         env:

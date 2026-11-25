@@ -32,7 +32,7 @@
 - [x] 实现单源连续相位生物力学 5 路 IMU 合成器（升级纬度感知偶极子地磁模型 $B_n=31\cos\phi,\;B_u=-62\sin\phi$，兼容南北半球）与 1Hz 18 颗 4 星座 GNSS/NMEA-0183 生成器（`nmea_gnss.cpp`）
 - [x] 新增全球地理感知射频合成引擎 `RfSynthesizer`（`native/daemon/rf_synth.{h,cpp}`，1Hz 与 GNSS 同步刷新）：覆盖 CN/HK/TW/JP/KR/SG-SEA/US/CA/UK/DE/FR/EU/AU-NZ/Global 区域运营商与无线法规表；实现 450m 网格 4G/5G 基站（Cost-231 衰落 + OU 波动 + 3 dB 切换迟滞 + TimingAdvance + 用户固定基站）、80m 3×3 微网格 Wi-Fi AP 列表（合规信道/区域 SSID/单播 OUI/连贯 `center_freq0` + 用户固定热点）、以及 30B Apple `0x004C` iBeacon AD 报文与环境 BLE 合成
 - [x] 通过 `/proc/self/fd/<g_memfd>`（memfd `"kuroko_shm"`）以 `O_RDONLY` 打开只读句柄 `g_memfd_ro` 进行 Unix `SCM_RIGHTS`（`/dev/kuroko_root.sock`）与三服务 Binder（`location` / `phone` / 可选 `com.android.bluetooth` `AdapterBinder`）跨进程传递
-- [x] 升级 `127.0.0.1:28765` 鉴权 TCP IPC v3（18 命令：新增 `SET_RF_CONFIG`、`SET_RF_CELLS`、`SET_RF_WIFIS`、`SET_RF_BEACONS`；`STATUS` JSON 扩展 `bt_shm` 与 `rf_*` 实时遥测）与 `SET_LANG <auto|BCP-47>` 落盘
+- [x] 升级 `127.0.0.1:28765` 鉴权 TCP IPC v3（20 命令：新增 `SET_RF_CONFIG`、`SET_RF_CELLS`、`SET_RF_WIFIS`、`SET_RF_BEACONS`、`SET_GMS`、`RESET_ROUTE`；`STATUS` JSON 扩展 `daemon_pid`、`bt_shm`、`gms_*` 与 `rf_*` 实时遥测）与 `SET_LANG <auto|BCP-47>` 落盘
 - [x] 为 `/data/adb/kuroko/daemon.log` 实现 `256 KB` 上限原子轮转（`rotate_daemon_log_if_needed_locked()` 截取换行对齐 `128 KB` 尾部写入 `0600` `daemon.log.tmp` 后原子 `rename()` 替换）
 
 ---
@@ -44,7 +44,7 @@
 - [x] 升级三层多句柄发现覆盖 Non-wakeup/Wakeup 双句柄，在 `hook_save_sensor_usage_item` 过滤 `arg4 >= 0` 哨兵污染；覆写 8 类连续传感器（含 `TYPE_ORIENTATION (3)`）与 40Hz 单调计步注入；嵌入 `mv=13` 实时遥测（`kuroko.sensor.hook` / `kuroko.sensor.diag`）
 - [x] 跨版本兼容基线加固：Native NDK 编译目标下探至 `android-31`（Android 12+，零 API>31 Bionic 符号依赖）；`sensor_hook.cpp` 升级为 ABI 安全的 20 变体 `HookSlot` 多版本 Android 12–17 候选符号表（5 核心 + 3 发现位掩码去重，各参数个数变体独立精确签名包装与 `std::atomic` 原指针防 AAPCS64 栈参截断，未命中时 `LOGW` 自动打印 `.rela.plt` 候选符号供未知 OEM 排查）
 - [x] 新增 **Layer 2 进程隔离 GMS FLP 引擎（`native/zygisk/gms_hook.{h,cpp}` + `module.cpp` Companion cmd 2/3）**：`preAppSpecialize` 对 `com.google.android.gms.unstable`（Play Integrity / DroidGuard）、`.ui` 及全部其他应用无条件 `DLCLOSE_MODULE_LIBRARY`；仅 `com.google.android.gms` / `com.google.android.gms.persistent` 映射只读 `g_memfd_ro`（支持 `SET_GMS 0` 随时零驻留关闭），以纯 C++ ELF64 解析 + `PT_GNU_RELRO` 原子 Vtable 替换（零 Inline Hook、零 `dlopen`、16KB + BTI/PAC 安全）在 AIDL 线层按内核 `calling_uid` 接管 `IGoogleLocationManagerService` 与出站 `ILocationCallback` / `ILocationListener` / `ILocationStatusCallback`，经 JNI 构造洁净 `Location`（`isMock=false`）并内置 `Kuroko-1Hz-GMS` 主动推包泵（850ms 去重）；守护进程通过 `/proc/<pid>/cmdline` 校验存活并在 `STATUS` 上报可选 `gms_shm`/`gms_enabled`/`gms_diag`（支持 TCP `SET_GMS <0|1>`）
-- [x] 配置可扩展多语言安装器与模块元数据：`module.prop`（`id=kuroko_teleport`、`name=Kuroko Teleport`、`author=Kuroko Teleport`，构建/Release 阶段动态注入 KernelSU `updateJson`）；`module_template/lang/{en,zh}.sh`（16 对称键，含 `MOD_DESC` 及可选 `com.android.bluetooth` 提示）；`customize.sh` 通用 BCP-47 级联加载动态改写 `$MODPATH/module.prop` `description` 后清理 `$MODPATH/lang/` 与 `$MODPATH/apk/`
+- [x] 配置可扩展多语言安装器与模块元数据：`module.prop`（`id=kuroko_teleport`、`name=Kuroko Teleport`、`author=Kuroko Teleport`，构建/Release 阶段动态注入 KernelSU `updateJson`）；`module_template/lang/{en,zh}.sh`（17 对称键，含 `MOD_DESC`、暂存失败告警及可选 `com.android.bluetooth` 提示）；`customize.sh` 通用 BCP-47 级联加载动态改写 `$MODPATH/module.prop` `description` 后清理 `$MODPATH/lang/` 与 `$MODPATH/apk/`
 - [x] 落实 All-in-One 策略 A1/A2/A4（SHA-256 验签、流式 `pm install -r -d -S`、PMS 离线暂存 `/data/adb/kuroko/pending_apk/` 由 `service.sh` 补装、签名冲突与 `uninstall.sh` 严禁 `pm uninstall` 保护用户路线）
 - [x] 跨平台构建与 CI/Release 工程化：`build_module.py` / `native/build_native.py` 动态探测 SDK/NDK/CMake/Ninja/LLVM，配合 `scripts/audit_i18n.py`、`.github/workflows/{ci,release}.yml`（含 `update.json` 发布）与 `.github/ISSUE_TEMPLATE/bug_report.yml` 产出并审计 `dist/kuroko-teleport-ksu-module.zip`（16KB + BTI/PAC + 零 `libc++_shared.so` + 零 `dlopen`）
 
@@ -93,10 +93,10 @@
   - [x] 刷入 `v0.7.0(13)` All-in-One 模块包，验证四端版本对齐（`v0.7.0(13) · P3 · SHM2`）且未启用或未勾选 `com.android.bluetooth` 时正常放行模拟不误锁
   - [x] 在 LSPosed 可选启用 `com.android.bluetooth` 并重启，验证双描述符（`IAdapter` / `IBluetooth`）`KUROKO_BINDER_TX_GET_BT_BINDER` 桥接成功（`B✓`、`bt_shm=1`）且诊断中心零 `bluetooth` SELinux AVC 拦截
   - [x] 实测跨国/跨区坐标下虚拟 4G/5G 基站（LTE/NR 服务与邻区小区）、`ServiceState` 1Hz 热切换（无需重启目标 App 即时刷新运营商与 MCC/MNC）及开启本地 SIM 同步后的 `ISub` `SubscriptionInfo` 改写，已配对蓝牙设备连接不受干扰（Wi-Fi 列表与自定义 iBeacon 现场导入待按需抽测）
-- [ ] **`v0.7.0` 双层 GMS FusedLocationProvider (FLP) 真机回归验收（待用户实机验证）**
-  - [ ] 确认未在 LSPosed 勾选 `com.google.android.gms` 且 `com.google.android.gms.unstable` 零驻留（Play Integrity 不受影响），核验射频设置顶栏 `GMS G✓` 与诊断中心第 7 项 `GMS 融合定位钩子` 正常、零 `gmscore_app` SELinux AVC 拦截
-  - [ ] 实测依赖 `FusedLocationProviderClient`（`requestLocationUpdates` / `getLastLocation` / `getCurrentLocation` / `LocationAvailability`）的海外地图与定位应用：验证室内静止 1Hz 持续推送且非目标应用、GMS 缓存与 Find My Device 零串扰
-  - [ ] 验证「射频信号仿真 → GMS 融合定位接管」关闭（`SET_GMS 0`）重启后 GMS 零驻留，以及 Zygisk Next DenyList 阻止 GMS 加载时优雅回退至 Layer 1（`WorkSource`）
+- [x] **`v0.7.0` 双层 GMS FusedLocationProvider (FLP) 真机回归验收（✅ 已通过）**
+  - [x] 确认未在 LSPosed 勾选 `com.google.android.gms` 且 `com.google.android.gms.unstable` 零驻留（Play Integrity 不受影响），核验射频设置顶栏 `GMS G✓`（含 Android 17 `Parcel::objects()` 回退扫描）与诊断中心第 7 项 `GMS 融合定位钩子` 正常、零 `gmscore_app` SELinux AVC 拦截
+  - [x] 实测依赖 `FusedLocationProviderClient`（`requestLocationUpdates` / `getLastLocation` / `getCurrentLocation` / `LocationAvailability`）的海外地图与定位应用：验证室内静止 1Hz 持续推送、跨区切换实时生效且非目标应用、GMS 缓存与 Find My Device 零串扰
+  - [x] 验证「射频信号仿真 → GMS 融合定位接管」关闭（`SET_GMS 0`）后待重启/零驻留状态区分，以及 Zygisk Next DenyList 阻止 GMS 加载时优雅回退至 Layer 1（`WorkSource`）
 
 ---
 

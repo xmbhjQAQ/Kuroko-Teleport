@@ -227,8 +227,8 @@ jobs:
             - \`update.json\` — KernelSU 管理器在线更新元数据（仅正式 Release 启用）
 
           > **LSPosed 作用域提醒 / LSPosed Scope Reminder**
-          > 请**仅勾选**：**系统框架 (\`android\`)** 与 **电话服务 (\`com.android.phone\`)**，**切勿勾选任何目标应用**。
-          > Enable **ONLY** **System Framework (\`android\`)** and **Phone Services (\`com.android.phone\`)** — **NEVER check target apps**.
+          > 请**仅勾选**：**系统框架 (\`android\`)**、**电话服务 (\`com.android.phone\`)**，如需 BLE 仿真可额外勾选 **蓝牙 (\`com.android.bluetooth\`)**；**切勿勾选任何目标应用或 \`com.google.android.gms\`**。
+          > Enable **ONLY** **System Framework (\`android\`)**, **Phone Services (\`com.android.phone\`)**, and optionally **Bluetooth (\`com.android.bluetooth\`)** for BLE — **NEVER check target apps or \`com.google.android.gms\`**.
 
           ### SHA-256 Checksums
           \`\`\`text

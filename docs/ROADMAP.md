@@ -59,8 +59,8 @@ flowchart LR
     - **三进程系统侧射频 Hook**：`VirtualCellBuilder.kt` + `TelephonyHook.kt`（虚拟 LTE/NR `CellInfo`、`ServiceState` 含 `NetworkRegistrationInfo.mRplmn`、`Kuroko-1Hz-Tel` 跨区热切换与 `IOnSubscriptionsChangedListener` 主动推送，以及 `ISub` `SubscriptionManagerService`/`SubscriptionController` 按 UID 改写 `SubscriptionInfo`）；`VirtualWifiBuilder.kt` + `WifiConnectivityHook.kt`（虚拟 `ScanResult` + 802.11d Country IE + `getCountryCode` + 虚拟已连 `WifiInfo`）；`BluetoothHook.kt`（`system_server` `service-bluetooth.jar` 缓存远程 Binder 经仅 Root `KUROKO_BINDER_TX_GET_BT_BINDER` 桥接至 `com.android.bluetooth` `/apex/com.android.bt`，双兼容 Android 17 `IAdapter` 与 `IBluetooth`，实现按 UID 抑制真实 BLE/经典蓝牙发现与 1Hz 虚拟 iBeacon 注入，`bt_shm` 可选绝不锁死模拟）；并在文档明确记录零注入边界（进程内直读 `/dev/__properties__` `gsm.*` 的 6 个 `TelephonyManager` 快捷方法刻意不改写）。
     - **主控端配置与实测导入**：新增 `RfConfigStore`、`RfLiveImporter`（一键导入当前周边实测基站/Wi-Fi/BLE iBeacon 及按需可选 OpenCelliD 查询）、`TargetAppSheet` 三态微调与 `RfConfigDialog`（含可选 `GMS G✓/G-` 徽章与 `SET_GMS` 零驻留开关），并在诊断中心升级为 **7 项自动体检**（集成可选蓝牙 `B` 与可选 GMS 融合定位 `G` 检查、`KurokoGmsHook` 抓取、`gmscore_app` AVC 过滤与 OpenCelliD Token 脱敏）。
     - **双层海外 GMS 融合定位（FLP）与 Play Integrity 保护**：**Layer 1**（`LocationHook.kt` 严格零串扰 `WorkSource` 归因，仅在全部应用 UID 均命中 `KUROKO_POLICY_LOCATION` 时接管系统/OEM/microG 代理）；**Layer 2**（`kuroko_zygisk` `gms_hook.{h,cpp}` 严禁在 LSPosed 勾选 GMS，对 `com.google.android.gms.unstable`/`.ui`/其他应用无条件 `DLCLOSE`，仅在 `com.google.android.gms` / `.persistent` 通过 `PT_GNU_RELRO` 纯原子 Vtable 替换在 AIDL 线层按内核 `calling_uid` 接管 `IGoogleLocationManagerService` 与出站 `ILocationCallback`/`ILocationListener`/`ILocationStatusCallback`，JNI 构造洁净 `Location` 且内建 1Hz 室内主动推包泵 `Kuroko-1Hz-GMS`，零污染 GMS 缓存/CHRE/Find My Device）。
-- **阶段收口验收（✅ Phase 1 与 `v0.7.0` 核心射频实机已通过 · GMS 真机回归待测）**：
-  - Phase 1 全链路已在 Android 17 测试设备验收通过；`v0.7.0` 四端版本对齐、`L✓ P✓ S✓ B✓`（含零 `bluetooth` AVC）、跨国/跨区 4G/5G 基站、`ServiceState` 热切换与 `ISub` 本地 SIM 订阅改写均已实机验收通过；双层 GMS FLP 待在含 GMS 环境下完成真机回归验收。
+- **阶段收口验收（✅ Phase 1 与 `v0.7.0` 射频 / 双层 GMS FLP 真机全通过）**：
+  - Phase 1 全链路已在 Android 17 测试设备验收通过；`v0.7.0` 四端版本对齐、`L✓ P✓ S✓ B✓ G✓`（零 `bluetooth` / `gmscore_app` AVC）、跨国/跨区 4G/5G 基站、`ServiceState` 热切换、`ISub` 本地 SIM 订阅改写及双层 GMS FLP（含 Android 17 `Parcel::objects()` 回退扫描）均已实机验收通过。
 
 ---
 
@@ -71,9 +71,9 @@ flowchart LR
 - **轨道 1：多版本 Android 12–17 传感器 ABI 与多 ROM 泛化**
   1. **多版本 `libsensorservice.so` 符号表与 `android-31` 编译基线（✅ 代码基线已落地 · 待社区多机型真机验证）**：Native NDK 构建目标已下探至 `android-31`（零 API>31 Bionic 依赖），`native/zygisk/sensor_hook.cpp` 已引入覆盖 API 31–37 的 `HookSlot` 候选符号表（各参数变体独立精确签名包装 + 位掩码去重计数 + 未知 OEM 符号 `LOGW` 自动转储）；后续将结合社区在 Android 12–16 多机型导出的脱敏诊断包持续补齐非标 OEM 符号变体与运行时偏移校验。
   2. **跨厂商 ROM 可选适配模块**：在保持现有 HyperOS 豁免模块独立运行的前提下，补充其他主流 ROM（AOSP / Pixel、ColorOS、OriginOS、One UI 等）的定位代理、省电冻结与模糊定位可选适配钩子，全部做到反射弱绑定、按类存在性静默按需启用。
-- **轨道 2：海外 GMS FusedLocationProvider (FLP) / `WorkSource` 深度适配（✅ 核心双层已落地 `v0.7.0` · 待真机回归与围栏扩展）**
+- **轨道 2：海外 GMS FusedLocationProvider (FLP) / `WorkSource` 深度适配（✅ 核心双层已于 `v0.7.0` 真机验收通过 · 后续扩展围栏）**
   1. **Layer 1 严格零串扰 `WorkSource` 归因（✅ 已完成，`v0.7.0`）**：`LocationHook.kt` 完整解析 `WorkSource` / `AttributionSource` 调用链，仅在所有应用 UID 均启用 `KUROKO_POLICY_LOCATION` 时接管代理注册，彻底避免混合多客户端串扰。
-  2. **Layer 2 进程隔离 GMS AIDL 线层接管与 Play Integrity 保护（✅ 已完成，`v0.7.0` · 待实机回归验收）**：`kuroko_zygisk` `gms_hook.{h,cpp}` 仅在 `com.google.android.gms` / `.persistent` 驻留（对 `.unstable` 无条件卸载，支持 `SET_GMS 0` 零驻留关闭），纯原子 Vtable 替换完整覆盖前台/回调型 `FusedLocationProviderClient`（`requestLocationUpdates`/`getLastLocation`/`getCurrentLocation`/`LocationAvailability`）与 1Hz 室内主动推包；**已知边界**：若 Zygisk Next DenyList 阻止 GMS 进程加载模块则优雅回退至 Layer 1。
+  2. **Layer 2 进程隔离 GMS AIDL 线层接管与 Play Integrity 保护（✅ 已完成并真机通过，`v0.7.0`）**：`kuroko_zygisk` `gms_hook.{h,cpp}` 仅在 `com.google.android.gms` / `.persistent` 驻留（对 `.unstable` 无条件卸载，支持 `SET_GMS 0` 零驻留关闭与待重启诊断区分），纯原子 Vtable 替换完整覆盖前台/回调型 `FusedLocationProviderClient`（`requestLocationUpdates`/`getLastLocation`/`getCurrentLocation`/`LocationAvailability`）与 1Hz 室内主动推包；**已知边界**：若 Zygisk Next DenyList 阻止 GMS 进程加载模块则优雅回退至 Layer 1。
   3. **`PendingIntent` 后台地理围栏（Geofencing）拦截（📋 规划中）**：后续版本扩展支持基于 `PendingIntent` 的 GMS 后台定位与地理围栏投递。
   4. **高阶 `GnssMeasurements` 原始观测合成（可选）**：针对校验原始伪距、载波相位与 `GnssClock` 的极严风控 App，升级当前“安全抑制降级”策略为同源开普勒星历伪距与多普勒频移合成器。
 
