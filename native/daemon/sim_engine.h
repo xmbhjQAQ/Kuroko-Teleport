@@ -57,6 +57,8 @@ struct SimStatus {
 
 class SimEngine {
 public:
+    static constexpr double kMinRouteLengthM = 1.0;
+
     SimEngine();
 
     void set_active(bool active);

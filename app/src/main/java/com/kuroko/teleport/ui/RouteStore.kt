@@ -733,7 +733,7 @@ class RouteStore(context: Context) {
                 }
                 val loop = obj.optBool("loop", true)
                 if (strictImport) {
-                    if (hadInvalidWaypoint || pts.size < 2 || CoordTransform.routeLengthMeters(pts, loop) <= 1e-3) {
+                    if (hadInvalidWaypoint || pts.size < 2 || CoordTransform.routeLengthMeters(pts, loop) <= CoordTransform.MIN_ROUTE_LENGTH_M) {
                         throw IllegalArgumentException(invalidErr)
                     }
                 }

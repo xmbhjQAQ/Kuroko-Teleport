@@ -48,6 +48,36 @@ class CoordAndImportValidationTest {
     }
 
     @Test
+    fun strictRouteImportEnforcesOneMeterMinimumRouteLength() {
+        val subMeterPts = listOf(
+            GeoPoint(31.230000, 121.470000),
+            GeoPoint(31.230001, 121.470000)
+        )
+        val subMeterLen = CoordTransform.routeLengthMeters(subMeterPts, closedLoop = false)
+        assertTrue(subMeterLen > 0.05 && subMeterLen < CoordTransform.MIN_ROUTE_LENGTH_M)
+
+        val subMeterOpen = """
+            {"routes":[{"name":"11cm-open","loop":false,"waypoints":[{"lat":31.230000,"lon":121.470000},{"lat":31.230001,"lon":121.470000}]}]}
+        """.trimIndent()
+        val subMeterLoop = """
+            {"routes":[{"name":"11cm-loop","loop":true,"waypoints":[{"lat":31.230000,"lon":121.470000},{"lat":31.230001,"lon":121.470000}]}]}
+        """.trimIndent()
+        val validShortRoute = """
+            {"routes":[{"name":"2m-valid","loop":false,"waypoints":[{"lat":31.230000,"lon":121.470000},{"lat":31.230020,"lon":121.470000}]}]}
+        """.trimIndent()
+
+        assertTrue(RouteStore.parseRoutesJson(subMeterOpen, strictImport = true).isFailure)
+        assertTrue(RouteStore.parseRoutesJson(subMeterLoop, strictImport = true).isFailure)
+
+        val accepted = RouteStore.parseRoutesJson(validShortRoute, strictImport = true).getOrThrow()
+        assertEquals(1, accepted.size)
+        assertTrue(
+            CoordTransform.routeLengthMeters(accepted[0].waypoints, accepted[0].loop) >
+                CoordTransform.MIN_ROUTE_LENGTH_M
+        )
+    }
+
+    @Test
     fun strictRouteImportAcceptsValidAndAntimeridianRoutes() {
         val validRoute = SavedRoute(
             id = "r-valid",

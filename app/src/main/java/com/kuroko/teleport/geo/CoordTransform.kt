@@ -22,6 +22,7 @@ object CoordTransform {
     private const val A = 6378245.0
     private const val EE = 0.00669342162296594323
     private const val EARTH_RADIUS_M = 6378137.0
+    const val MIN_ROUTE_LENGTH_M = 1.0
 
     fun isValidWgs84(lat: Double, lon: Double, alt: Double = 45.0): Boolean {
         return lat.isFinite() && lon.isFinite() && alt.isFinite() &&

@@ -189,7 +189,7 @@ SetRouteResult SimEngine::set_route(const std::vector<Waypoint>& pts, bool loop,
     double built_len = 0.0;
     if (pts.size() >= 2) {
         build_smooth_route_samples(pts, loop, &built_samples, &built_len);
-        if (!std::isfinite(built_len) || built_len <= 1e-3 || built_samples.size() < 2) {
+        if (!std::isfinite(built_len) || built_len <= kMinRouteLengthM || built_samples.size() < 2) {
             return SetRouteResult::ZeroLengthRoute;
         }
     }
@@ -296,7 +296,7 @@ void SimEngine::build_smooth_route_samples(const std::vector<Waypoint>& pts, boo
 
 void SimEngine::sample_route_at_locked(double s_m, double* lat, double* lon, double* alt,
                                        float* bearing_deg, float* corner_factor) const {
-    if (samples_.size() < 2 || route_length_m_ <= 1e-3) {
+    if (samples_.size() < 2 || route_length_m_ <= kMinRouteLengthM) {
         *lat = cur_lat_;
         *lon = cur_lon_;
         *alt = cur_alt_;
@@ -395,7 +395,7 @@ void SimEngine::reset_route() {
     lap_count_ = 0;
     route_epoch_++;
     rf_dirty_ = true;
-    if (samples_.size() >= 2 && route_length_m_ > 1e-3) {
+    if (samples_.size() >= 2 && route_length_m_ > kMinRouteLengthM) {
         float dummy_cf = 1.0f;
         sample_route_at_locked(0.0, &cur_lat_, &cur_lon_, &cur_alt_, &cur_bearing_deg_, &dummy_cf);
         disp_lat_ = cur_lat_;
@@ -557,7 +557,7 @@ void SimEngine::step(double dt_sec, uint64_t boot_ns, uint64_t utc_ms, KurokoShm
 
     // 1. Advance route kinematics if active & moving
     float eff_speed = 0.0f;
-    if (active_ && moving_ && samples_.size() >= 2 && route_length_m_ > 1.0) {
+    if (active_ && moving_ && samples_.size() >= 2 && route_length_m_ > kMinRouteLengthM) {
         // Two-timescale human running pace fluctuation driven by pace_var_ratio_:
         // - Medium-term pace rhythm (OU tau = 18s, sigma = 0.75 * pace_var_ratio_)
         // - Short-term stride/breathing micro-fluctuation (OU tau = 4s, sigma = 0.35 * pace_var_ratio_)
@@ -671,7 +671,7 @@ void SimEngine::step(double dt_sec, uint64_t boot_ns, uint64_t utc_ms, KurokoShm
     shm->speed_accuracy_mps = 0.25f;
     shm->bearing_accuracy_deg = (eff_speed > 0.4f) ? 6.5f : 25.0f;
     shm->total_distance_m = static_cast<float>(total_distance_m_);
-    shm->route_progress = (route_length_m_ > 1.0)
+    shm->route_progress = (route_length_m_ > kMinRouteLengthM)
                           ? static_cast<float>(dist_on_route_m_ / route_length_m_) : 0.0f;
     shm->lap_count = lap_count_;
     shm->jitter_sigma_m = jitter_sigma_m_;

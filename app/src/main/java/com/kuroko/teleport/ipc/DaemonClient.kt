@@ -521,7 +521,7 @@ class DaemonClient {
         }
         if (points.size >= 2) {
             val geoPts = points.map { GeoPoint(it.latWgs84, it.lonWgs84, it.altM) }
-            if (CoordTransform.routeLengthMeters(geoPts, loop) <= 1e-3) {
+            if (CoordTransform.routeLengthMeters(geoPts, loop) <= CoordTransform.MIN_ROUTE_LENGTH_M) {
                 return Result.failure(IllegalArgumentException("ERR ZERO_LENGTH_ROUTE"))
             }
         }
