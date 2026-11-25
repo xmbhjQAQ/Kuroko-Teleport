@@ -330,7 +330,7 @@
     <string name="rf_toggle_ble_ambient_title">Ambient Virtual BLE Devices</string>
     <string name="rf_toggle_ble_ambient_sub">Mix realistic ambient BLE peripherals alongside pinned beacons</string>
     <string name="rf_toggle_sim_country_title">Local SIM Country Mode</string>
-    <string name="rf_toggle_sim_country_sub">Also spoof SIM country &amp; operator ISO (off = natural roaming mode)</string>
+    <string name="rf_toggle_sim_country_sub">Rewrite SubscriptionInfo country &amp; carrier per-UID via ISub (in-process gsm.* property reads remain untouched; off = natural roaming)</string>
     <string name="rf_carrier_section">Carrier &amp; Region</string>
     <string name="rf_carrier_auto">Auto (Geo)</string>
     <string name="rf_carrier_custom">Custom</string>

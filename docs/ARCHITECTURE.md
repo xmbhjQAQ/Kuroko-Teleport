@@ -37,9 +37,9 @@ flowchart TB
     subgraph SYS["系统侧拦截层 (唯一 UID 最小割边界)"]
         COMP["Zygisk Root Companion\nboot-guard 检查 + 4s 等待 + SCM_RIGHTS 传递 g_memfd_ro"]
         NATIVE["system_server Native (libsensorservice.so, android-31, 零 dlopen)\nJNI System.load (default ns) + 8 逻辑槽位 (20 变体) 纯 PLT/GOT 自愈看门狗\n40Hz 多句柄计步注入 + 8类 IMU/Orientation 覆写\nSystem.setProperty(kuroko.sensor.hook/diag, 含 mv=13)"]
-        JAVA_SYS["system_server Java (LSPosed: android)\n1Hz Location/GNSS/NMEA 主动推包泵 · HyperOS4 豁免\nAPEX WifiServiceImpl (AP/Country/802.11d) + ConnectivityService\nTelephonyRegistry · service-bluetooth.jar 缓存 IBluetooth · xp=13"]
-        JAVA_PHONE["com.android.phone (LSPosed)\nPhoneInterfaceManager\n4G/5G 虚拟基站 + 网络/SIM 国家码按 UID 隔离"]
-        JAVA_BT["com.android.bluetooth (LSPosed 可选, /apex/com.android.bt)\nAdapterBinder + ScanController/ScanBinder + RemoteDevices\n按 UID 抑制真实扫描 + 1Hz 虚拟 BLE/iBeacon 注入"]
+        JAVA_SYS["system_server Java (LSPosed: android)\n1Hz Location/GNSS/NMEA & 1Hz Telephony 热切换泵 · HyperOS4 豁免\nAPEX WifiServiceImpl (AP/Country/802.11d) + ConnectivityService\nTelephonyRegistry · service-bluetooth.jar 缓存 IBluetooth/IAdapter · xp=13"]
+        JAVA_PHONE["com.android.phone (LSPosed)\nPhoneInterfaceManager + ISub (SubscriptionManagerService)\n4G/5G 虚拟基站 + 网络/SIM SubscriptionInfo 按 UID 隔离"]
+        JAVA_BT["com.android.bluetooth (LSPosed 可选, /apex/com.android.bt)\nAdapterBinder (IAdapter) + AdapterServiceBinder (IBluetooth)\nScanController/ScanBinder + RemoteDevices 按 UID 抑制与 1Hz BLE 注入"]
     end
 
     subgraph TARGET["目标 App 进程 (零注入 / 零 Hook / 内存完全干净)"]
@@ -205,7 +205,7 @@ flowchart LR
 - **Binder NDK 合法事务码、三段 `PING` 与仅 Root 蓝牙桥接**：
   - `KUROKO_BINDER_TX_SET_SHM = 0x004B5243`（`'KRC'`）、`KUROKO_BINDER_TX_PING = 0x004B5250`（`'KRP'`）、`KUROKO_BINDER_TX_GET_BT_BINDER = 0x004B5242`（`'KRB'`）、`KUROKO_ACK_OK = 0x4F4B`。
   - `ILocationManager` `PING` 回复保留 2 个 int（`mapped`, `sensorOk`）并在第 3 段 UTF-8 `byte[]`（`<= 256` 字节）前置拼入 `xp=13`，由守护进程 `parse_kv_int32` 提取 `g_xposed_code` (`xp`) 与 `g_zygisk_code` (`mv`)。
-  - 由于 `servicemanager` 仅注册 `bluetooth_manager` 而非顶级 `bluetooth` 服务，守护进程以 Root 身份（`Binder.getCallingUid() == 0` 严格校验）向 `location` 发送 `KUROKO_BINDER_TX_GET_BT_BINDER`，取回 `BluetoothHook` 在 `system_server` 捕获缓存的远程 `com.android.bluetooth` `AdapterBinder`（`IBinder`），再经 `AParcel_writeParcelFileDescriptor` 直接推送只读 `g_memfd_ro` 并更新 `g_bt_shm_ok`。
+  - 由于 `servicemanager` 仅注册 `bluetooth_manager` 而非顶级 `bluetooth` 服务，守护进程以 Root 身份（`Binder.getCallingUid() == 0` 严格校验）向 `location` 发送 `KUROKO_BINDER_TX_GET_BT_BINDER`，取回 `BluetoothHook` 在 `system_server` 捕获缓存的远程 `com.android.bluetooth` Binder（兼容 Android 17 拆分后的 `android.bluetooth.IAdapter` 与 `android.bluetooth.IBluetooth` 双描述符，守护进程按接口描述动态匹配对应 `AIBinder_Class`），再经 `AParcel_writeParcelFileDescriptor` 直接推送只读 `g_memfd_ro` 并更新 `g_bt_shm_ok`。
 
 ### 4.3 统一版本契约与四端严格版本锁定状态机
 
@@ -305,13 +305,21 @@ flowchart TD
 - **APEX Wi-Fi 列表、802.11d 与国家码伪造（`WifiConnectivityHook.kt` & `VirtualWifiBuilder.kt`）**：
   - 动态捕获 `service-wifi.jar` 与 `service-connectivity.jar` 独立 `ClassLoader`；`VirtualWifiBuilder.kt` 反射构造 Android 12–17 `ScanResult`（含 API 33+ `WifiSsid.fromBytes`、`channelWidth`/`centerFreq0` 及 **802.11d Country IE (`id=7`)**）。
   - `WifiServiceImpl.getScanResults` 对 `SPOOF_WIFI` 返回填充虚拟列表的 APEX `com.android.wifi.x.com.android.modules.utils.ParceledListSlice`（`HIDE_WIFI` 返回空切片）；`WifiServiceImpl.getCountryCode` 对 `SPOOF_WIFI` 按 UID 返回 `rfHeader.wifiCountryIso`（绝不修改硬件无线监管域）；`WifiServiceImpl.getConnectionInfo` 在 `SPOOF_WIFI && WIFI_SPOOF_CONN` 存在虚拟已连热点时返回克隆改写后的虚拟 `WifiInfo`（其余情况由 `ConnectivityService.createWithSensitiveInfoSanitizedIfNecessaryWhenParceled` 强制 `includeLocationInfo=false` 清洗同步与 `NetworkCallback` 双通道）。
-- **双进程 4G/5G 蜂窝基站与国家码伪造（`TelephonyHook.kt` & `VirtualCellBuilder.kt`）**：
-  - `VirtualCellBuilder.kt` 经缓存反射构造 Android 12–17 `CellInfoLte` / `CellInfoNr`（`CellIdentity*` + `CellSignalStrength*`）与 `GsmCellLocation`。
-  - `com.android.phone` (`PhoneInterfaceManager`) 对 `SPOOF_CELL` 在 `getAllCellInfo`/`requestCellInfoUpdate*`/`getCellLocation`/`getLastKnownCellIdentity` 交付虚拟基站列表，并按 UID 改写网络运营商与国家码（仅当 `KUROKO_RF_FLAG_SPOOF_SIM_COUNTRY` 开启时才改写 SIM 国家码/运营商）；`HIDE_CELL && !SPOOF_CELL` 维持隐藏返回空/null。
-  - `system_server` (`TelephonyRegistry`) 对 `SPOOF_CELL` 按 `Record.callerUid` 拦截并改写回调派发（`onCellInfoChanged`/`onCellLocationChanged`/`onServiceStateChanged`），零全局 `mCellInfo` 污染；同时豁免 HyperOS 4 `GpsProxyManager` 与 `MiuiBlurLocationManagerImpl`（`HyperOsHook.kt`）。
+- **双进程 4G/5G 蜂窝基站、实时热切换与 `ISub` SIM 改写（`TelephonyHook.kt` & `VirtualCellBuilder.kt`）**：
+  - `VirtualCellBuilder.kt` 经缓存反射构造 Android 12–17 `CellInfoLte` / `CellInfoNr`（`CellIdentity*` + `CellSignalStrength*`）与 `GsmCellLocation`；克隆改写 `ServiceState` 时同步修改外层运营商名/数字码、克隆 `NetworkRegistrationInfo` 的 `mCellIdentity` 与 `mRplmn`（及在开启本地 SIM 同步时置 `roaming=false`）；并新增 `rewriteSubscriptionInfo()`（Android 14–17 优先 `SubscriptionInfo.Builder(orig)` 拷贝构造，Android 12–13 回退 `Parcel` 克隆），零修改全局缓存。
+  - `com.android.phone` 同时 Hook `PhoneInterfaceManager`（`getAllCellInfo`/`requestCellInfoUpdate*`/`getCellLocation`/`getLastKnownCellIdentity`/`getServiceState*`/`getSimCarrierIdName` 等）与 `ISub`（Android 14–17 `SubscriptionManagerService` / Android 12–13 `SubscriptionController` 的全部 `SubscriptionInfo` 查询接口）：`SPOOF_CELL` 返回虚拟 4G/5G 基站与网络标识，并在开启 `KUROKO_RF_FLAG_SPOOF_SIM_COUNTRY` 时按 UID 同步改写 `SubscriptionInfo` 的 `countryIso`/`mcc`/`mnc`/`carrierName`/`displayName`；`HIDE_CELL && !SPOOF_CELL` 维持隐藏返回空/null。
+  - `system_server` (`TelephonyRegistry`) 对 `SPOOF_CELL` 按 `Record.callerUid` 拦截并改写回调派发（`onCellInfoChanged`/`onCellLocationChanged`/`onServiceStateChanged`），零全局 `mCellInfo` 污染；并启动 **`Kuroko-1Hz-Tel`** 主动变更泵（跟踪用户态 App `UID >= 10000` 的 `IPhoneStateListener` 与 `IOnSubscriptionsChangedListener`，在 `listenWithEventList` / `remove` / `removeOnSubscriptionsChangedListener` 注销时即时清理），跨国/跨区切换或开关「本地 SIM 国家码同步」时 1 秒内热推送新 `ServiceState` / `CellLocation` / `CellInfo` / `onSubscriptionsChanged()`，停止模拟时自动回推一次真实 `ServiceState` 还原；同时豁免 HyperOS 4 `GpsProxyManager` 与 `MiuiBlurLocationManagerImpl`（`HyperOsHook.kt`）。
 - **蓝牙 APEX 扫描隔离与 1Hz 虚拟 iBeacon 注入（`BluetoothHook.kt` · 可选）**：
-  - `system_server` 捕获 `service-bluetooth.jar` APEX ClassLoader，钩取 `BluetoothManagerService$BluetoothServiceConnection.onServiceConnected` / `AdapterBinder` / `registerAdapter`，将远程 `IBluetooth` `IBinder` 缓存至 `ShmReader.cachedBluetoothBinder`，供 `kuroko_daemon` 经仅 Root 权限 `KUROKO_BINDER_TX_GET_BT_BINDER` 直接推送 `g_memfd_ro`。
-  - `com.android.bluetooth`（`/apex/com.android.bt` `Bluetooth.apk`，兼容 `com.google.android.bluetooth`）拦截 `com.android.bluetooth.btservice.AdapterBinder`（兼容 A12–16 `AdapterServiceBinder`）接收 `g_memfd_ro`；在 Android 16/17 `le_scan.{ScanController,ScanBinder,ScannerMap,ScannerApp,ScanClient}` 与 Android 12–15 `gatt.GattService` 中按调用方 `appUid` 抑制真实 `onScanResult`/`onBatchScanResults`（零影响已配对耳机/手表与常规 GATT），并由 1Hz 虚拟注入器构造真实 `android.bluetooth.le.ScanResult`（`ScanRecord.parseFromBytes(advBytes)` + 校验调用方 `ScanFilter.matches()`）按 UID 派发；同步在 `RemoteDevices`/`AdapterService.startDiscovery` 按 UID 抑制经典蓝牙 `ACTION_FOUND`。
+  - `system_server` 捕获 `service-bluetooth.jar` APEX ClassLoader，钩取 `BluetoothManagerService$BluetoothServiceConnection.onServiceConnected` / `AdapterBinder` / `registerAdapter`，将远程 `IAdapter` / `IBluetooth` `IBinder` 缓存至 `ShmReader.cachedBluetoothBinder`，供 `kuroko_daemon` 经仅 Root 权限 `KUROKO_BINDER_TX_GET_BT_BINDER` 直接推送 `g_memfd_ro`。
+  - `com.android.bluetooth`（`/apex/com.android.bt` `Bluetooth.apk`，兼容 `com.google.android.bluetooth`）同时 Hook `AdapterBinder`（`android.bluetooth.IAdapter$Stub`）与 `AdapterServiceBinder`（`android.bluetooth.IBluetooth$Stub`）按动态接口描述接收 `g_memfd_ro`；在 Android 16/17 `le_scan.{ScanController,ScanBinder,ScannerMap,ScannerApp,ScanClient}` 与 Android 12–15 `gatt.GattService` 中按调用方 `appUid` 抑制真实 `onScanResult`/`onBatchScanResults`（零影响已配对耳机/手表与常规 GATT），并由 1Hz 虚拟注入器构造真实 `android.bluetooth.le.ScanResult`（`ScanRecord.parseFromBytes(advBytes)` + 校验调用方 `ScanFilter.matches()`）按 UID 派发；同步在 `RemoteDevices`/`AdapterService.startDiscovery` 按 UID 抑制经典蓝牙 `ACTION_FOUND`。
+
+### 7.1 零注入与按 UID 隔离的已知架构边界（Telephony 系统属性直读）
+
+在严格坚守 **「目标 App 零注入 + 按 UID 隔离 + 不篡改全局系统属性」** 的前提下，Android 12–17 存在一类内核级物理边界：
+
+- `TelephonyManager` 的 6 个无参/按 `subId` 快捷方法——`getNetworkOperatorName()`、`getNetworkOperator()`、`getNetworkCountryIso()` 与 `getSimOperatorName()`、`getSimOperator()`、`getSimCountryIso()`——在 AOSP 客户端实现中直接经 `TelephonyProperties.*()` 调用 libc `SystemProperties`，以只读 `mmap` 访问全局共享页 `/dev/__properties__/u:object_r:radio_prop:s0` 中的 `gsm.operator.{alpha,numeric,iso-country}` 与 `gsm.sim.operator.{alpha,numeric,iso-country}`，**全程不经过任何 Binder IPC**。
+- 由于系统服务层无法感知谁读取了全局只读共享页，而修改全局 `gsm.*` 属性会污染锁屏/状态栏及所有非目标应用并干扰真实基带漫游/VoLTE/时区逻辑、Hook 目标进程则会破坏零注入隐蔽性、私有挂载 `/dev/__properties__` 又会引入 `mountinfo` 检测痕迹，Kuroko Teleport **刻意保留这 6 个进程内属性直读接口不作改写**。
+- 所有经过 Binder IPC 的核心接口——`CellInfo`、`CellLocation`、`ServiceState`（含 `NetworkRegistrationInfo.mRplmn`）、`SubscriptionManager` (`ISub` `SubscriptionInfo`)、`WifiManager`（`ScanResult` / `802.11d` / `getCountryCode` / `WifiInfo`）与 `BluetoothLeScanner`——均已实现 100% 按 UID 零注入接管。
 
 ---
 

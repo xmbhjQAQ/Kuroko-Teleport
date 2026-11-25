@@ -54,9 +54,9 @@
 - [x] 配置单 APK 集成的 Xposed 元数据（`xposedmodule=true`、`xposedminversion=93`、`xposedscope=@array/xposed_scope` 严格限定为系统组件 `android`、`com.android.phone` 及可选的 `com.android.bluetooth`，`assets/xposed_init` 声明 `com.kuroko.teleport.xposed.KurokoXposedEntry`，双语 `xposed_description`，目标 App 零注入）
 - [x] 升级 `ShmReader.kt` 至 `KurokoShm v2`（`KUROKO_SHM_VERSION=2`，新增 `readRfHeader`/`readCells`/`readWifiAps`/`readBleDevices`、`cachedBluetoothBinder` 与仅 Root UID 0 的 `KUROKO_BINDER_TX_GET_BT_BINDER` 桥接，回传 `sensorOk` + `xp=13` 前缀 `sensor_diag`）
 - [x] 实现 `LocationHook.kt`（1Hz 主动推包泵）、`HyperOsHook.kt`（HyperOS 4 豁免）
-- [x] 新增 `VirtualCellBuilder.kt` 并升级 `TelephonyHook.kt`：在 `com.android.phone`（`PhoneInterfaceManager`）与 `system_server`（`TelephonyRegistry`）按 UID 支持三态策略（透传 / 隐藏 / `SPOOF_CELL` 虚拟 4G/5G `CellInfoLte`/`CellInfoNr` + `GsmCellLocation` + 网络与可选 SIM 国家码/运营商改写）
+- [x] 新增 `VirtualCellBuilder.kt` 并升级 `TelephonyHook.kt`：在 `com.android.phone`（`PhoneInterfaceManager` + `ISub` `SubscriptionManagerService`/`SubscriptionController`）与 `system_server`（`TelephonyRegistry` + `Kuroko-1Hz-Tel` 主动热切换泵）按 UID 支持三态策略（透传 / 隐藏 / `SPOOF_CELL` 虚拟 4G/5G `CellInfoLte`/`CellInfoNr`、`GsmCellLocation`、克隆改写 `ServiceState` 与 `NetworkRegistrationInfo.mRplmn` 及可选 `SubscriptionInfo` 改写），并明确文档化进程内直读 `/dev/__properties__` `gsm.*` 快捷方法的零注入边界
 - [x] 新增 `VirtualWifiBuilder.kt` 并升级 `WifiConnectivityHook.kt`：在 APEX `service-wifi.jar` 与 `service-connectivity.jar` 按 UID 支持三态策略（透传 / 隐藏 / `SPOOF_WIFI` 虚拟 `ScanResult` + 802.11d Country IE + `getCountryCode` + 可选虚拟已连 `WifiInfo`）
-- [x] 新增 `BluetoothHook.kt` 并接入 `KurokoXposedEntry.kt`：`system_server` 捕获 `service-bluetooth.jar` 暴露的 `IBluetooth` 缓存至 `ShmReader`；`com.android.bluetooth`（`/apex/com.android.bt`）拦截 `AdapterBinder` 接收 `g_memfd_ro`，在 `ScanController`/`ScanBinder`/`ScannerMap`（及 Android 12–15 `GattService` 回退）与 `RemoteDevices` 实现按 UID 抑制真实 BLE/经典蓝牙发现及 1Hz 虚拟 BLE / iBeacon 注入（零影响已配对设备）
+- [x] 新增 `BluetoothHook.kt` 并接入 `KurokoXposedEntry.kt`：`system_server` 捕获 `service-bluetooth.jar` 暴露的远程 Binder 缓存至 `ShmReader`；`com.android.bluetooth`（`/apex/com.android.bt`）同时 Hook `AdapterBinder`（`IAdapter`）与 `AdapterServiceBinder`（`IBluetooth`）接收 `g_memfd_ro`，在 `ScanController`/`ScanBinder`/`ScannerMap`（及 Android 12–15 `GattService` 回退）与 `RemoteDevices` 实现按 UID 抑制真实 BLE/经典蓝牙发现及 1Hz 虚拟 BLE / iBeacon 注入（零影响已配对设备）
 
 ---
 
@@ -88,10 +88,10 @@
   - [x] KSU2 模块与主控 APK 零 Bootloop 顺利进桌面，LSPosed 仅勾选系统组件（零目标 App 注入）
   - [x] `g_memfd_ro` 修复 `tmpfs` `{ write }` SELinux 告警，实现 `loc_shm` / `phone_shm` 握手，主流地图应用跨城定位首通通过
   - [x] All-in-One 单包刷入与双语本地化、四端版本对齐、`L✓ P✓ S✓` 全亮、设置页多语言实时切换、应用内诊断中心自动体检与脱敏 ZIP 导出、内置传感器自检、主流运动计步类应用室内桌面静止长时跑圈与 `boot_guard=2` 熔断全部验收通过
-- [ ] **`v0.7.0` 全球射频仿真（`SHM=2` / `IPC=3`）真机联合验收**
-  - [ ] 刷入 `v0.7.0(13)` All-in-One 模块包，验证四端版本对齐（`v0.7.0(13) · P3 · SHM2`）且未勾选 `com.android.bluetooth` 时正常放行模拟不误锁
-  - [ ] 在 LSPosed 可选启用 `com.android.bluetooth` 并重启，验证 `KUROKO_BINDER_TX_GET_BT_BINDER` 桥接成功（`B✓`、`bt_shm=1`）且诊断中心无 `bluetooth` SELinux AVC 拦截
-  - [ ] 实测跨国/跨区坐标下虚拟 4G/5G 基站（LTE/NR + 网络/可选 SIM 国家码）、虚拟 Wi-Fi 列表（区域 SSID/信道 + `getCountryCode` + 802.11d IE + 虚拟已连热点）与自定义 iBeacon 注入及实测扫描一键导入，确认已配对蓝牙耳机/手表正常连接不受干扰
+- [x] **`v0.7.0` 全球射频仿真（`SHM=2` / `IPC=3`）核心真机验收（✅ 核心已通过）**
+  - [x] 刷入 `v0.7.0(13)` All-in-One 模块包，验证四端版本对齐（`v0.7.0(13) · P3 · SHM2`）且未启用或未勾选 `com.android.bluetooth` 时正常放行模拟不误锁
+  - [x] 在 LSPosed 可选启用 `com.android.bluetooth` 并重启，验证双描述符（`IAdapter` / `IBluetooth`）`KUROKO_BINDER_TX_GET_BT_BINDER` 桥接成功（`B✓`、`bt_shm=1`）且诊断中心零 `bluetooth` SELinux AVC 拦截
+  - [x] 实测跨国/跨区坐标下虚拟 4G/5G 基站（LTE/NR 服务与邻区小区）、`ServiceState` 1Hz 热切换（无需重启目标 App 即时刷新运营商与 MCC/MNC）及开启本地 SIM 同步后的 `ISub` `SubscriptionInfo` 改写，已配对蓝牙设备连接不受干扰（Wi-Fi 列表与自定义 iBeacon 现场导入待按需抽测）
 
 ---
 

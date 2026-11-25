@@ -114,9 +114,26 @@ adb shell su -c "touch /data/adb/modules/kuroko_teleport/disable && reboot"
 </details>
 
 <details>
+<summary><strong>为什么部分检测工具或锁区 App 仍可能读到真实运营商名或 SIM 国家码？（零注入边界说明）</strong></summary>
+
+Kuroko Teleport 严格遵循 **「目标 App 零注入 + 按 UID 隔离 + 不篡改全局系统属性」** 原则，各无线通道的覆盖边界如下：
+
+- **已 100% 按 UID 零注入接管（走系统服务 Binder IPC）**：
+  - 4G/5G 基站列表与小区身份（`CellInfo` / `CellLocation` 中的 `MCC / MNC / TAC / CI / PCI / ARFCN / Band / 运营商名`）；
+  - 驻网状态与跨区热切换推送（`ServiceState` 中的 `operatorNumeric / operatorAlpha / NetworkRegistrationInfo.mRplmn / CellIdentity`）；
+  - 多卡 SIM 订阅信息（开启 **「本地 SIM 国家码同步」** 后，经 `SubscriptionManager` / `ISub` 改写 `SubscriptionInfo` 的 `countryIso / mcc / mnc / carrierName / displayName`）；
+  - Wi-Fi 周边列表、802.11d 国家码 IE、`WifiManager.getCountryCode()` 与可选虚拟已连 `WifiInfo`；
+  - 蓝牙 / BLE 扫描隔离与 1Hz 自定义 iBeacon / 环境 BLE 注入。
+- **已知架构边界（目标 App 进程内直读系统属性）**：
+  - 在 Android 12+ 上，`TelephonyManager` 的 6 个快捷方法——`getNetworkOperatorName()`、`getNetworkOperator()`、`getNetworkCountryIso()` 与 `getSimOperatorName()`、`getSimOperator()`、`getSimCountryIso()`——不经过系统服务 Binder，而是由目标 App 进程通过 libc `mmap` 直接读取只读共享内存页 `/dev/__properties__` 中的 `gsm.operator.*` / `gsm.sim.operator.*` 全局系统属性。
+  - 为避免向目标 App 注入代码（破坏零注入隐蔽性）以及避免改写全局基带属性影响状态栏、正常通话/VoLTE 或未勾选应用，这 6 个进程内属性直读接口刻意不做修改。
+
+</details>
+
+<details>
 <summary><strong>遇到问题如何自查或提交 Bug 反馈？</strong></summary>
 
-打开应用内 **设置 → 诊断与日志**（或在引擎离线/版本锁定弹窗中点击 **查看诊断日志**），即可运行 5 项自动体检并分标签查看诊断日志。提交 GitHub Issue 时，请点击 **「复制摘要」** 粘贴脱敏 Markdown 摘要，必要时通过 **「分享诊断包 / 保存文件」** 附带导出 ZIP（鉴权令牌、地图 Key、路线坐标与无关应用日志均会自动脱敏，且默认匿名化目标 App 包名）。
+打开应用内 **设置 → 诊断与日志**（或在引擎离线/版本锁定弹窗中点击 **查看诊断日志**），即可运行 6 项自动体检并分标签查看诊断日志。提交 GitHub Issue 时，请点击 **「复制摘要」** 粘贴脱敏 Markdown 摘要，必要时通过 **「分享诊断包 / 保存文件」** 附带导出 ZIP（鉴权令牌、地图 Key、路线坐标与无关应用日志均会自动脱敏，且默认匿名化目标 App 包名）。
 
 </details>
 

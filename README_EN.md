@@ -114,9 +114,26 @@ Open your device's **App Info → Battery** settings for **Kuroko Teleport** and
 </details>
 
 <details>
+<summary><strong>Why do some diagnostics or region-locked apps still see my real carrier name or SIM country code? (Zero-injection boundary)</strong></summary>
+
+Kuroko Teleport strictly preserves **zero target-app injection**, **per-UID isolation**, and **no global system-property mutation**. Across Android 12–17, RF identity APIs fall into two distinct paths:
+
+- **100% per-UID spoofed with zero target-app injection (Binder IPC)**:
+  - 4G/5G cell towers and serving cell identity (`CellInfo` / `CellLocation`: `MCC / MNC / TAC / CI / PCI / ARFCN / Band / operator alpha`);
+  - Network registration state with 1Hz hot-switch push (`ServiceState`: `operatorNumeric`, `operatorAlpha`, `NetworkRegistrationInfo.mRplmn`, `CellIdentity`);
+  - Multi-SIM subscription metadata (`SubscriptionManager` / `ISub`: `SubscriptionInfo` `countryIso`, `mcc`, `mnc`, `carrierName`, `displayName` when **Local SIM Country Sync** is enabled);
+  - Nearby Wi-Fi scan lists, 802.11d Country IE, `WifiManager.getCountryCode()`, and optional virtual connected `WifiInfo`;
+  - Bluetooth/BLE scan suppression and 1Hz custom iBeacon / ambient BLE injection.
+- **Known architectural boundary (in-process SystemProperties reads)**:
+  - On Android 12+, six `TelephonyManager` shortcuts — `getNetworkOperatorName()`, `getNetworkOperator()`, `getNetworkCountryIso()`, `getSimOperatorName()`, `getSimOperator()`, and `getSimCountryIso()` — do **not** call any Binder service; the target app process reads global read-only properties (`gsm.operator.*` / `gsm.sim.operator.*`) directly from `/dev/__properties__` via libc `mmap`.
+  - To avoid injecting code into target apps or mutating global baseband properties (which would leak to non-target apps, the status bar, and real cellular/VoLTE behavior), those six in-process property getters are intentionally left untouched.
+
+</details>
+
+<details>
 <summary><strong>How do I troubleshoot issues or report a bug?</strong></summary>
 
-Open **Settings → Diagnostics &amp; Logs** (or tap **View Logs** from the offline / version-lock dialog) to run the built-in Auto Health Checks and inspect categorized logs. When opening a GitHub Issue, tap **Copy Summary** to paste the redacted Markdown report, and optionally attach the exported ZIP via **Share ZIP / Save ZIP** (auth tokens, API keys, routes/coordinates, and unrelated app logs are always stripped automatically, with target app package anonymization enabled by default).
+Open **Settings → Diagnostics &amp; Logs** (or tap **View Logs** from the offline / version-lock dialog) to run the 6 built-in Auto Health Checks and inspect categorized logs. When opening a GitHub Issue, tap **Copy Summary** to paste the redacted Markdown report, and optionally attach the exported ZIP via **Share ZIP / Save ZIP** (auth tokens, API keys, routes/coordinates, and unrelated app logs are always stripped automatically, with target app package anonymization enabled by default).
 
 </details>
 

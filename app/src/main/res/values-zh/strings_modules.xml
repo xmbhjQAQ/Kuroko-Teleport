@@ -330,7 +330,7 @@
     <string name="rf_toggle_ble_ambient_title">合成环境虚拟 BLE 设备</string>
     <string name="rf_toggle_ble_ambient_sub">在自定义信标外叠加适量低频环境 BLE 外设</string>
     <string name="rf_toggle_sim_country_title">本地 SIM 国家码同步</string>
-    <string name="rf_toggle_sim_country_sub">同步改写 SIM 国家码与运营商（关闭则表现为自然漫游）</string>
+    <string name="rf_toggle_sim_country_sub">经 ISub 按 UID 改写 SIM 订阅国家码与运营商（不影响进程内直读 gsm.* 属性；关闭则表现为自然漫游）</string>
     <string name="rf_carrier_section">运营商与区域国家码</string>
     <string name="rf_carrier_auto">自动（按坐标）</string>
     <string name="rf_carrier_custom">自定义</string>

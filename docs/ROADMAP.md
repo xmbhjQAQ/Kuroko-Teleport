@@ -56,10 +56,10 @@ flowchart LR
   - **`v0.7.0` 全球地理感知射频仿真（虚拟 4G/5G 基站 + 虚拟 Wi-Fi 列表 + 蓝牙/BLE 隔离与 iBeacon + 国家码，✅ 已实现）**：
     - **协议与共享内存升级（`SHM=2` / `IPC=3`）**：`KurokoShm v2` 在 16KB 页内新增 `KurokoRfHeader`、`KurokoCell[8]`、`KurokoWifiAp[16]`、`KurokoBleDevice[16]`；新增 4 组策略位（`SPOOF_WIFI`/`SPOOF_CELL`/`HIDE_BLE`/`SPOOF_BLE`）与 3 预设（全量拟真 `0x3E7` / 严格隐藏 `0x13F` / 同城户外 `0x02F`）；TCP IPC v3 新增 `SET_RF_CONFIG`/`SET_RF_CELLS`/`SET_RF_WIFIS`/`SET_RF_BEACONS` 并扩展 `STATUS` 射频遥测。
     - **全球射频与地磁合成引擎**：`RfSynthesizer`（`native/daemon/rf_synth.{h,cpp}`）内置覆盖全球主流地区的运营商 MCC/MNC、4G/5G 频段与 Wi-Fi 法规信道表，1Hz 合成时空连续基站（Cost-231 衰落 + 3 dB 切换迟滞）、微网格 Wi-Fi AP 列表与 30B Apple `0x004C` iBeacon 广播；`sim_engine.cpp` 升级南北半球精确的纬度感知偶极子地磁模型。
-    - **三进程系统侧射频 Hook**：`VirtualCellBuilder.kt` + `TelephonyHook.kt`（虚拟 LTE/NR `CellInfo` + 网络/可选 SIM 国家码）；`VirtualWifiBuilder.kt` + `WifiConnectivityHook.kt`（虚拟 `ScanResult` + 802.11d Country IE + `getCountryCode` + 虚拟已连 `WifiInfo`）；`BluetoothHook.kt`（`system_server` `service-bluetooth.jar` 缓存 `IBluetooth` 经仅 Root `KUROKO_BINDER_TX_GET_BT_BINDER` 桥接至 `com.android.bluetooth` `/apex/com.android.bt`，实现按 UID 抑制真实 BLE/经典蓝牙发现与 1Hz 虚拟 iBeacon 注入，`bt_shm` 可选绝不锁死模拟）。
+    - **三进程系统侧射频 Hook**：`VirtualCellBuilder.kt` + `TelephonyHook.kt`（虚拟 LTE/NR `CellInfo`、`ServiceState` 含 `NetworkRegistrationInfo.mRplmn`、`Kuroko-1Hz-Tel` 跨区热切换与 `IOnSubscriptionsChangedListener` 主动推送，以及 `ISub` `SubscriptionManagerService`/`SubscriptionController` 按 UID 改写 `SubscriptionInfo`）；`VirtualWifiBuilder.kt` + `WifiConnectivityHook.kt`（虚拟 `ScanResult` + 802.11d Country IE + `getCountryCode` + 虚拟已连 `WifiInfo`）；`BluetoothHook.kt`（`system_server` `service-bluetooth.jar` 缓存远程 Binder 经仅 Root `KUROKO_BINDER_TX_GET_BT_BINDER` 桥接至 `com.android.bluetooth` `/apex/com.android.bt`，双兼容 Android 17 `IAdapter` 与 `IBluetooth`，实现按 UID 抑制真实 BLE/经典蓝牙发现与 1Hz 虚拟 iBeacon 注入，`bt_shm` 可选绝不锁死模拟）；并在文档明确记录零注入边界（进程内直读 `/dev/__properties__` `gsm.*` 的 6 个 `TelephonyManager` 快捷方法刻意不改写）。
     - **主控端配置与实测导入**：新增 `RfConfigStore`、`RfLiveImporter`（一键导入当前周边实测基站/Wi-Fi/BLE iBeacon 及按需可选 OpenCelliD 查询）、`TargetAppSheet` 三态微调与 `RfConfigDialog`，并在诊断中心集成蓝牙钩子检查（`B`）与 OpenCelliD Token 脱敏。
-- **阶段收口验收（✅ Phase 1 已完成 · `v0.7.0` 射频真机验收进行中）**：
-  - Phase 1 全链路已在 Android 17 测试设备验收通过；`v0.7.0` 全球射频（4G/5G 基站、Wi-Fi 列表/国家码、蓝牙/BLE 与 iBeacon）待完成实机联合回归验收。
+- **阶段收口验收（✅ Phase 1 与 `v0.7.0` 核心射频实机已通过）**：
+  - Phase 1 全链路已在 Android 17 测试设备验收通过；`v0.7.0` 四端版本对齐、`L✓ P✓ S✓ B✓`（含零 `bluetooth` AVC）、跨国/跨区 4G/5G 基站、`ServiceState` 热切换与 `ISub` 本地 SIM 订阅改写均已实机验收通过。
 
 ---
 
