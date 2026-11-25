@@ -406,6 +406,7 @@
     <string name="rf_toggle_gms_flp_sub">Per-UID FLP spoofing inside GMS main/persistent process only; never touches gms.unstable (Play Integrity safe). Restart GMS or reboot after toggling.</string>
     <string name="rf_gms_toggled_enabled">GMS FLP enabled — restart GMS or reboot to activate</string>
     <string name="rf_gms_toggled_disabled">GMS FLP disabled — restart GMS or reboot for zero footprint</string>
+    <string name="rf_gms_toggle_failed">Failed to update GMS FLP setting — daemon unavailable</string>
 
     <!-- Diagnostics Bluetooth & GMS Checks -->
     <string name="diag_check_bt_title">Bluetooth / BLE Hook (B)</string>

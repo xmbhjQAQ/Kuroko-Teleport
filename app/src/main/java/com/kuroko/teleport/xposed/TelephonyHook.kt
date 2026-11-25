@@ -601,7 +601,7 @@ object TelephonyHook {
         }
 
         // 2b. Track IOnSubscriptionsChangedListener registrations so toggling Local SIM Country Sync
-        //     or switching regions notifies apps (e.g. Cellular-Z) to re-fetch SubscriptionInfo live.
+        //     or switching regions notifies apps (e.g. cell monitor apps) to re-fetch SubscriptionInfo live.
         for (addSubName in listOf(
             "addOnSubscriptionsChangedListener",
             "addOnSubscriptionsChangedListenerWithFeature"
@@ -696,7 +696,7 @@ object TelephonyHook {
         hookPhoneStateListenerProxy(cl)
 
         // 5. Start 1Hz live ServiceState / CellInfo / CellLocation change pump for SPOOF_CELL listeners
-        //    so switching regions/carriers while an app (e.g. Cellular-Z) stays open immediately updates
+        //    so switching regions/carriers while an app (e.g. cell monitor apps) stays open immediately updates
         //    its Network Operator / MCC / MNC / ServiceState without waiting for a physical modem event.
         startTelephonyChangePump()
 

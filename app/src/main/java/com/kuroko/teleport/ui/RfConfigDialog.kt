@@ -49,6 +49,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,6 +73,7 @@ import com.kuroko.teleport.R
 import com.kuroko.teleport.geo.GeoPoint
 import com.kuroko.teleport.ipc.DaemonSnapshot
 import com.kuroko.teleport.ipc.KurokoProtocol
+import com.kuroko.teleport.rf.GmsToggleFeedback
 import com.kuroko.teleport.rf.LiveScanOutcome
 import com.kuroko.teleport.rf.PinnedBleBeacon
 import com.kuroko.teleport.rf.PinnedCell
@@ -80,6 +82,7 @@ import com.kuroko.teleport.rf.RfConfig
 import com.kuroko.teleport.rf.RfConfigStore
 import com.kuroko.teleport.rf.RfFormatting
 import com.kuroko.teleport.rf.RfLiveImporter
+import com.kuroko.teleport.rf.executeGmsToggle
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -105,7 +108,7 @@ fun RfConfigDialog(
     mapCenterWgs84: GeoPoint,
     onDismiss: () -> Unit,
     onSaveAndSync: (RfConfig) -> Unit,
-    onSetGmsEnabled: (Boolean) -> Unit,
+    onSetGmsEnabled: suspend (Boolean) -> Boolean,
     onNotify: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -248,7 +251,14 @@ fun RfConfigDialog(
     }
 
     val st = daemonSnap.status
-    var gmsEnabledUi by remember(st.gmsEnabled) { mutableStateOf(st.gmsEnabled) }
+    var gmsEnabledState by remember { mutableStateOf(st.gmsEnabled) }
+    var gmsUpdating by remember { mutableStateOf(false) }
+
+    LaunchedEffect(st.gmsEnabled, gmsUpdating) {
+        if (!gmsUpdating) {
+            gmsEnabledState = st.gmsEnabled
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -489,11 +499,31 @@ fun RfConfigDialog(
                                     RfToggleRow(
                                         title = stringResource(R.string.rf_toggle_gms_flp_title),
                                         subtitle = stringResource(R.string.rf_toggle_gms_flp_sub),
-                                        checked = gmsEnabledUi,
+                                        checked = gmsEnabledState,
                                         activeColor = NeuColors.EmeraldDeep,
-                                        onCheckedChange = { enabled ->
-                                            gmsEnabledUi = enabled
-                                            onSetGmsEnabled(enabled)
+                                        onCheckedChange = { next ->
+                                            if (gmsUpdating) return@RfToggleRow
+                                            val prevConfirmed = st.gmsEnabled
+                                            gmsUpdating = true
+                                            gmsEnabledState = next
+                                            scope.launch {
+                                                try {
+                                                    val outcome = executeGmsToggle(
+                                                        prevConfirmed = prevConfirmed,
+                                                        requestedEnabled = next,
+                                                        onSetGmsEnabled = onSetGmsEnabled
+                                                    )
+                                                    gmsEnabledState = outcome.confirmedState
+                                                    val msgRes = when (outcome.feedback) {
+                                                        GmsToggleFeedback.ENABLED -> R.string.rf_gms_toggled_enabled
+                                                        GmsToggleFeedback.DISABLED -> R.string.rf_gms_toggled_disabled
+                                                        GmsToggleFeedback.FAILED -> R.string.rf_gms_toggle_failed
+                                                    }
+                                                    onNotify(context.getString(msgRes))
+                                                } finally {
+                                                    gmsUpdating = false
+                                                }
+                                            }
                                         }
                                     )
                                 }

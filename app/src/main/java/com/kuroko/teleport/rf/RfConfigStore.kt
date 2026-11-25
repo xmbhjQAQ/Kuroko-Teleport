@@ -1,11 +1,11 @@
 package com.kuroko.teleport.rf
 
 import android.content.Context
-import android.util.Base64
 import com.kuroko.teleport.ipc.KurokoProtocol
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 import java.util.Locale
 import java.util.UUID
 
@@ -136,13 +136,42 @@ object RfFormatting {
         return "${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20, 32)}"
     }
 
+    fun truncateUtf8(text: String, maxBytes: Int): String {
+        if (maxBytes <= 0 || text.isEmpty()) return ""
+        val sb = StringBuilder(minOf(text.length, maxBytes))
+        var byteCount = 0
+        var index = 0
+        val len = text.length
+        while (index < len) {
+            val cp = Character.codePointAt(text, index)
+            val charCount = Character.charCount(cp)
+            if (charCount == 1 && Character.isSurrogate(text[index])) {
+                index += 1
+                continue
+            }
+            val cpBytes = when {
+                cp <= 0x7F -> 1
+                cp <= 0x7FF -> 2
+                cp <= 0xFFFF -> 3
+                else -> 4
+            }
+            if (byteCount + cpBytes > maxBytes) {
+                break
+            }
+            sb.appendCodePoint(cp)
+            byteCount += cpBytes
+            index += charCount
+        }
+        return sb.toString()
+    }
+
     fun utf8ToHex(text: String, maxBytes: Int): String {
-        val raw = text.toByteArray(StandardCharsets.UTF_8)
-        val len = minOf(raw.size, maxBytes)
-        if (len <= 0) return ""
-        val sb = StringBuilder(len * 2)
-        for (i in 0 until len) {
-            val b = raw[i].toInt() and 0xFF
+        val safe = truncateUtf8(text, maxBytes)
+        val raw = safe.toByteArray(StandardCharsets.UTF_8)
+        if (raw.isEmpty()) return ""
+        val sb = StringBuilder(raw.size * 2)
+        for (bByte in raw) {
+            val b = bByte.toInt() and 0xFF
             sb.append(HEX_CHARS[b ushr 4])
             sb.append(HEX_CHARS[b and 0x0F])
         }
@@ -150,11 +179,10 @@ object RfFormatting {
     }
 
     fun alphaToBase64OrAuto(alpha: String): String {
-        val trimmed = alpha.trim().take(15)
+        val trimmed = truncateUtf8(alpha.trim(), 15)
         if (trimmed.isEmpty()) return "AUTO"
-        return Base64.encodeToString(
-            trimmed.toByteArray(StandardCharsets.UTF_8),
-            Base64.NO_WRAP
+        return Base64.getEncoder().encodeToString(
+            trimmed.toByteArray(StandardCharsets.UTF_8)
         )
     }
 
@@ -172,6 +200,39 @@ object RfFormatting {
     }
 
     private const val HEX_CHARS = "0123456789abcdef"
+}
+
+enum class GmsToggleFeedback {
+    ENABLED,
+    DISABLED,
+    FAILED
+}
+
+data class GmsToggleOutcome(
+    val confirmedState: Boolean,
+    val succeeded: Boolean,
+    val feedback: GmsToggleFeedback
+)
+
+suspend fun executeGmsToggle(
+    prevConfirmed: Boolean,
+    requestedEnabled: Boolean,
+    onSetGmsEnabled: suspend (Boolean) -> Boolean
+): GmsToggleOutcome {
+    val ok = runCatching { onSetGmsEnabled(requestedEnabled) }.getOrDefault(false)
+    return if (ok) {
+        GmsToggleOutcome(
+            confirmedState = requestedEnabled,
+            succeeded = true,
+            feedback = if (requestedEnabled) GmsToggleFeedback.ENABLED else GmsToggleFeedback.DISABLED
+        )
+    } else {
+        GmsToggleOutcome(
+            confirmedState = prevConfirmed,
+            succeeded = false,
+            feedback = GmsToggleFeedback.FAILED
+        )
+    }
 }
 
 class RfConfigStore(context: Context) {
@@ -219,7 +280,7 @@ class RfConfigStore(context: Context) {
         carrierMnc = c.carrierMnc.coerceIn(0, 999),
         carrierMncDigits = if (c.carrierMncDigits == 3) 3 else 2,
         carrierCountryIso = c.carrierCountryIso.trim().lowercase(Locale.US).filter { it in 'a'..'z' }.take(2),
-        carrierAlpha = c.carrierAlpha.trim().take(15),
+        carrierAlpha = RfFormatting.truncateUtf8(c.carrierAlpha.trim(), 15),
         openCellIdToken = c.openCellIdToken.trim(),
         pinnedCells = c.pinnedCells.take(KurokoProtocol.MAX_PINNED_CELLS).map { sanitizeCell(it) },
         pinnedWifis = c.pinnedWifis.take(KurokoProtocol.MAX_PINNED_WIFIS).map { sanitizeWifi(it) },
@@ -241,7 +302,7 @@ class RfConfigStore(context: Context) {
 
     private fun sanitizeWifi(ap: PinnedWifiAp): PinnedWifiAp = ap.copy(
         bssid = RfFormatting.normalizeMac(ap.bssid),
-        ssid = ap.ssid.trim().take(32).ifEmpty { "WiFi-AP" },
+        ssid = RfFormatting.truncateUtf8(ap.ssid.trim(), 32).ifEmpty { "WiFi-AP" },
         frequencyMhz = ap.frequencyMhz.coerceIn(2412, 7125),
         rssiDbm = ap.rssiDbm.coerceIn(-100, -25)
     )
@@ -249,7 +310,7 @@ class RfConfigStore(context: Context) {
     private fun sanitizeBeacon(b: PinnedBleBeacon): PinnedBleBeacon = b.copy(
         mac = RfFormatting.normalizeMac(b.mac),
         deviceType = if (b.deviceType == 1) 1 else 0,
-        name = b.name.trim().take(23),
+        name = RfFormatting.truncateUtf8(b.name.trim(), 24),
         uuidHex32 = RfFormatting.normalizeUuidHex32(b.uuidHex32),
         major = b.major.coerceIn(0, 65535),
         minor = b.minor.coerceIn(0, 65535),

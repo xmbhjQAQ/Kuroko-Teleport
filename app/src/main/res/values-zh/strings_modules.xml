@@ -406,6 +406,7 @@
     <string name="rf_toggle_gms_flp_sub">仅在 GMS 定位进程按 UID 接管 FusedLocationProvider，绝不接触 gms.unstable（不影响 Play Integrity）；切换后需重启 GMS 或重启设备生效</string>
     <string name="rf_gms_toggled_enabled">已开启 GMS 融合定位接管 — 请重启 GMS 或重启设备生效</string>
     <string name="rf_gms_toggled_disabled">已关闭 GMS 融合定位接管 — 重启 GMS 或重启设备后零驻留</string>
+    <string name="rf_gms_toggle_failed">切换 GMS 融合定位开关失败，请确认后台引擎在线</string>
 
     <!-- Diagnostics Bluetooth & GMS Checks -->
     <string name="diag_check_bt_title">蓝牙 / BLE 钩子 (B)</string>
