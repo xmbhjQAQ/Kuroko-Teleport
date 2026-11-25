@@ -217,7 +217,7 @@ private fun KurokoControllerScreen() {
     var savedPoints by remember { mutableStateOf(pointStore.loadPoints()) }
     var savedRoutes by remember { mutableStateOf(routeStore.loadRoutes()) }
     val speedPresets by KurokoRuntime.speedPresets.collectAsState()
-    var targetApps by remember { mutableStateOf(routeStore.loadTargets()) }
+    var targetApps by remember { mutableStateOf(routeStore.resolveActiveTargets(persistIfChanged = true)) }
 
     // Shared process-level runtime states (synchronized with FloatingOverlayService)
     val daemonSnap by KurokoRuntime.snapshot.collectAsState()
@@ -455,6 +455,15 @@ private fun KurokoControllerScreen() {
     }
     val latestOnResumeOverlayCheck by rememberUpdatedState {
         KurokoRuntime.refreshAppLanguageFromSystem(context)
+        val resolvedTargets = routeStore.resolveTargets(routeStore.loadRawTargets(), persistIfChanged = true)
+        if (resolvedTargets.activeTargets != targetApps) {
+            targetApps = resolvedTargets.activeTargets
+        }
+        if (resolvedTargets.changed) {
+            scope.launch {
+                KurokoRuntime.pushResolvedTargetsIfIdle(resolvedTargets.activeTargets)
+            }
+        }
         if (pendingOverlayAfterPermission) {
             pendingOverlayAfterPermission = false
             if (Settings.canDrawOverlays(context)) {
@@ -558,8 +567,12 @@ private fun KurokoControllerScreen() {
         if (!ensureVersionCompatForStart()) return
         val targetPt = staticPointWgs84 ?: (mapController.getCenterWgs84() ?: centerWgs84)
         staticPointWgs84 = targetPt
-        if (targetApps.isNotEmpty()) {
-            daemon.setTargets(targetApps.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+        val resolvedTargets = routeStore.resolveActiveTargets(persistIfChanged = true)
+        if (resolvedTargets != targetApps) {
+            targetApps = resolvedTargets
+        }
+        if (resolvedTargets.isNotEmpty() || daemonStatus.targetCount > 0) {
+            daemon.setTargets(resolvedTargets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
         }
         val ptRes = daemon.setPoint(targetPt.lat, targetPt.lon, targetPt.alt)
         if (ptRes.isFailure) {
@@ -589,8 +602,12 @@ private fun KurokoControllerScreen() {
 
     suspend fun startDynamicRoute(moving: Boolean) {
         if (!ensureVersionCompatForStart()) return
-        if (targetApps.isNotEmpty()) {
-            daemon.setTargets(targetApps.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+        val resolvedTargets = routeStore.resolveActiveTargets(persistIfChanged = true)
+        if (resolvedTargets != targetApps) {
+            targetApps = resolvedTargets
+        }
+        if (resolvedTargets.isNotEmpty() || daemonStatus.targetCount > 0) {
+            daemon.setTargets(resolvedTargets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
         }
         KurokoRuntime.syncMotionStateFromUi(speedMps, paceVarRatio, motionMode, carryMode)
         daemon.setSpeed(speedMps)
@@ -2509,11 +2526,10 @@ private fun KurokoControllerScreen() {
             btShmOk = daemonStatus.btShm,
             onDismiss = { showTargetSheet = false },
             onApplyTargets = { updated ->
-                targetApps = updated
-                routeStore.saveTargets(updated)
                 scope.launch {
-                    val res = daemon.setTargets(updated.map { DaemonTargetSpec(it.uid, it.policyFlags) })
-                    if (res.isSuccess) showToast(context.getString(R.string.main_toast_targets_applied, updated.size))
+                    val (activeTargets, res) = KurokoRuntime.syncTargetsToDaemon(context, updated)
+                    targetApps = activeTargets
+                    if (res.isSuccess) showToast(context.getString(R.string.main_toast_targets_applied, activeTargets.size))
                     else showToast(
                         context.getString(
                             R.string.main_toast_targets_sync_failed,
@@ -2734,6 +2750,7 @@ private fun KurokoControllerScreen() {
             onReconnectDaemon = {
                 scope.launch {
                     daemon.resetConnection()
+                    KurokoRuntime.invalidateTargetSync()
                     KurokoRuntime.invalidateRfSync()
                     daemon.ping()
                         .onSuccess {

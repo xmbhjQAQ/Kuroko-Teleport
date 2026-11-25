@@ -145,6 +145,8 @@ fun TargetAppSheet(
             if (fresh != null) {
                 val oldPolicy = selected[key]?.second ?: KurokoProtocol.POLICY_ALL_SPOOF
                 selected[key] = fresh.uid to oldPolicy
+            } else {
+                selected.remove(key)
             }
         }
         loading = false

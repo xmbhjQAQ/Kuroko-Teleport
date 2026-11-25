@@ -3,6 +3,8 @@ package com.kuroko.teleport.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Process
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -89,6 +91,83 @@ data class SavedTargetApp(
     val uid: Int,
     val policyFlags: Int = KurokoProtocol.POLICY_ALL_STRICT
 )
+
+sealed class PackageUidLookup {
+    data class Found(val uid: Int) : PackageUidLookup()
+    object NotInstalled : PackageUidLookup()
+    object LookupError : PackageUidLookup()
+}
+
+data class TargetResolutionResult(
+    val activeTargets: List<SavedTargetApp>,
+    val persistedTargets: List<SavedTargetApp>,
+    val changed: Boolean,
+    val removedPackages: List<String>,
+    val updatedUidPackages: List<String>
+)
+
+fun resolveSavedTargets(
+    saved: List<SavedTargetApp>,
+    selfUid: Int,
+    lookupUid: (String) -> PackageUidLookup
+): TargetResolutionResult {
+    val active = mutableListOf<SavedTargetApp>()
+    val persisted = mutableListOf<SavedTargetApp>()
+    val removed = mutableListOf<String>()
+    val updated = mutableListOf<String>()
+    val seenPackages = HashSet<String>()
+    var changed = false
+
+    for (entry in saved) {
+        val pkg = entry.packageName.trim()
+        if (pkg.isEmpty()) {
+            changed = true
+            continue
+        }
+        if (!seenPackages.add(pkg)) {
+            changed = true
+            continue
+        }
+        when (val lookup = lookupUid(pkg)) {
+            is PackageUidLookup.Found -> {
+                val uid = lookup.uid
+                if (uid <= 0 || uid == selfUid) {
+                    changed = true
+                    removed.add(pkg)
+                } else {
+                    val resolved = SavedTargetApp(
+                        packageName = pkg,
+                        uid = uid,
+                        policyFlags = entry.policyFlags
+                    )
+                    active.add(resolved)
+                    persisted.add(resolved)
+                    if (uid != entry.uid || pkg != entry.packageName) {
+                        changed = true
+                        if (uid != entry.uid) {
+                            updated.add(pkg)
+                        }
+                    }
+                }
+            }
+            PackageUidLookup.NotInstalled -> {
+                changed = true
+                removed.add(pkg)
+            }
+            PackageUidLookup.LookupError -> {
+                persisted.add(entry)
+            }
+        }
+    }
+
+    return TargetResolutionResult(
+        activeTargets = active,
+        persistedTargets = persisted,
+        changed = changed,
+        removedPackages = removed,
+        updatedUidPackages = updated
+    )
+}
 
 const val SPEED_PRESET_KEY_WALK = "walk"
 const val SPEED_PRESET_KEY_JOG = "jog"
@@ -470,7 +549,7 @@ class RouteStore(context: Context) {
         parsed
     }
 
-    fun loadTargets(): List<SavedTargetApp> {
+    fun loadRawTargets(): List<SavedTargetApp> {
         val raw = prefs.getString(KEY_TARGETS, null) ?: return emptyList()
         return runCatching {
             val arr = JSONArray(raw)
@@ -480,12 +559,47 @@ class RouteStore(context: Context) {
                 val pkg = o.optString("pkg")
                 val uid = o.optInt("uid", -1)
                 val policy = o.optInt("policy", KurokoProtocol.POLICY_ALL_STRICT)
-                if (pkg.isNotBlank() && uid > 0) {
+                if (pkg.isNotBlank()) {
                     out.add(SavedTargetApp(pkg, uid, policy))
                 }
             }
             out
         }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Re-resolves each candidate package's UID for the current Android user via PackageManager.
+     * Prunes uninstalled packages, updates reassigned/reinstalled UIDs, rejects self UID,
+     * and omits transient LookupError packages from activeTargets without wiping persisted choices.
+     */
+    fun resolveTargets(
+        candidates: List<SavedTargetApp>,
+        persistIfChanged: Boolean = true
+    ): TargetResolutionResult {
+        val pm = appContext.packageManager
+        val selfUid = Process.myUid()
+        val result = resolveSavedTargets(candidates, selfUid) { pkg ->
+            try {
+                val info = pm.getApplicationInfo(pkg, 0)
+                PackageUidLookup.Found(info.uid)
+            } catch (_: PackageManager.NameNotFoundException) {
+                PackageUidLookup.NotInstalled
+            } catch (_: Throwable) {
+                PackageUidLookup.LookupError
+            }
+        }
+        if (persistIfChanged && result.changed) {
+            saveTargets(result.persistedTargets)
+        }
+        return result
+    }
+
+    fun resolveActiveTargets(persistIfChanged: Boolean = true): List<SavedTargetApp> {
+        return resolveTargets(loadRawTargets(), persistIfChanged = persistIfChanged).activeTargets
+    }
+
+    fun loadTargets(): List<SavedTargetApp> {
+        return resolveActiveTargets(persistIfChanged = true)
     }
 
     fun saveTargets(targets: List<SavedTargetApp>) {

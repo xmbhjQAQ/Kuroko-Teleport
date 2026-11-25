@@ -9,6 +9,7 @@ import com.kuroko.teleport.rf.RfConfigStore
 import com.kuroko.teleport.ui.AppLocaleManager
 import com.kuroko.teleport.ui.CustomSpeedPreset
 import com.kuroko.teleport.ui.RouteStore
+import com.kuroko.teleport.ui.SavedTargetApp
 import com.kuroko.teleport.ui.defaultSpeedPresets
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -252,6 +253,55 @@ object KurokoRuntime {
         rfConfigSynced = false
     }
 
+    fun invalidateTargetSync() {
+        initialTargetsSynced = false
+    }
+
+    /**
+     * Re-resolves target packages for the current Android user via PackageManager, prunes uninstalled
+     * apps and updates changed UIDs in RouteStore, and pushes strictly fresh UIDs to the daemon.
+     */
+    suspend fun syncTargetsToDaemon(
+        context: Context,
+        candidates: List<SavedTargetApp>? = null
+    ): Pair<List<SavedTargetApp>, Result<String>> {
+        init(context)
+        val store = RouteStore(context.applicationContext)
+        val resolved = if (candidates != null) {
+            val r = store.resolveTargets(candidates, persistIfChanged = false)
+            store.saveTargets(r.persistedTargets)
+            r
+        } else {
+            store.resolveTargets(store.loadRawTargets(), persistIfChanged = true)
+        }
+        if (resolved.removedPackages.isNotEmpty() || resolved.updatedUidPackages.isNotEmpty()) {
+            AppLogBuffer.i(
+                "Targets",
+                "Re-resolved targets: active=${resolved.activeTargets.size}, pruned=${resolved.removedPackages.size}, uidUpdated=${resolved.updatedUidPackages.size}"
+            )
+        }
+        val res = daemon.setTargets(resolved.activeTargets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+        if (res.isSuccess) {
+            initialTargetsSynced = true
+        }
+        pollOnce()
+        return resolved.activeTargets to res
+    }
+
+    /**
+     * Pushes already-resolved targets to the daemon unless sensor self-test temporarily owns targets.
+     */
+    suspend fun pushResolvedTargetsIfIdle(targets: List<SavedTargetApp>) {
+        selfTestMutex.withLock {
+            if (selfTestTargetsActive) return@withLock
+            val res = daemon.setTargets(targets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+            if (res.isSuccess) {
+                initialTargetsSynced = true
+            }
+        }
+        pollOnce()
+    }
+
     suspend fun setGmsEnabled(enabled: Boolean): Boolean {
         val res = daemon.setGmsEnabled(enabled)
         if (res.isSuccess) {
@@ -466,11 +516,18 @@ object KurokoRuntime {
         }
 
         val st = snap.status
+        val store = RouteStore(context.applicationContext)
         val completed = st.active && !st.moving && (
             (st.maxLaps > 0 && st.laps >= st.maxLaps) ||
                 (st.maxDistanceM > 1f && st.totalDistanceM >= st.maxDistanceM - 1f)
             )
         if (st.active && !st.moving && !completed && st.routeLengthM > 1f) {
+            if (!selfTestTargetsActive) {
+                val targets = store.resolveActiveTargets(persistIfChanged = true)
+                if (targets.isNotEmpty() || st.targetCount > 0) {
+                    daemon.setTargets(targets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+                }
+            }
             val res = daemon.start()
             if (res.isSuccess) {
                 AppLogBuffer.i("Runtime", "Resumed active route simulation")
@@ -481,10 +538,9 @@ object KurokoRuntime {
             return res
         }
 
-        val store = RouteStore(context.applicationContext)
         val draft = store.loadDraft()
         val cfg = store.loadSettings()
-        val targets = store.loadTargets()
+        val targets = store.resolveActiveTargets(persistIfChanged = true)
         if (draft.draftWaypoints.size < 2) {
             AppLogBuffer.w("Runtime", "HUD start aborted: no draft route configured")
             return Result.failure(
@@ -492,7 +548,7 @@ object KurokoRuntime {
             )
         }
 
-        if (targets.isNotEmpty()) {
+        if (targets.isNotEmpty() || st.targetCount > 0) {
             daemon.setTargets(targets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
         }
         val m = _motionState.value
@@ -536,7 +592,9 @@ object KurokoRuntime {
             selfTestMutex.withLock {
                 if (selfTestSessionId != mySession) return@withLock
                 if (!selfTestTargetsActive) {
-                    selfTestSavedTargets = savedTargets.toList()
+                    selfTestSavedTargets = RouteStore(context.applicationContext)
+                        .resolveActiveTargets(persistIfChanged = true)
+                        .map { DaemonTargetSpec(it.uid, it.policyFlags) }
                 }
                 val myUid = Process.myUid()
                 val others = selfTestSavedTargets
@@ -621,7 +679,12 @@ object KurokoRuntime {
                     selfTestTempJogActive = false
                 }
                 if (selfTestTargetsActive) {
-                    daemon.setTargets(selfTestSavedTargets)
+                    val restoreTargets = appContext?.let { ctx ->
+                        RouteStore(ctx)
+                            .resolveActiveTargets(persistIfChanged = true)
+                            .map { DaemonTargetSpec(it.uid, it.policyFlags) }
+                    } ?: selfTestSavedTargets
+                    daemon.setTargets(restoreTargets)
                     selfTestTargetsActive = false
                 }
                 if (hadAny) {
@@ -683,12 +746,25 @@ object KurokoRuntime {
             }
 
             if (!initialTargetsSynced && !selfTestTargetsActive) {
-                initialTargetsSynced = true
                 val ctx = appContext
-                if (ctx != null && st.targetCount == 0) {
-                    val savedTargets = RouteStore(ctx).loadTargets()
-                    if (savedTargets.isNotEmpty()) {
-                        daemon.setTargets(savedTargets.map { DaemonTargetSpec(it.uid, it.policyFlags) })
+                if (ctx != null) {
+                    val store = RouteStore(ctx)
+                    val resolved = store.resolveTargets(store.loadRawTargets(), persistIfChanged = true)
+                    if (resolved.removedPackages.isNotEmpty() || resolved.updatedUidPackages.isNotEmpty()) {
+                        AppLogBuffer.i(
+                            "Targets",
+                            "Re-resolved targets on sync: active=${resolved.activeTargets.size}, pruned=${resolved.removedPackages.size}, uidUpdated=${resolved.updatedUidPackages.size}"
+                        )
+                    }
+                    if (st.targetCount > 0 || resolved.activeTargets.isNotEmpty()) {
+                        val pushRes = daemon.setTargets(
+                            resolved.activeTargets.map { DaemonTargetSpec(it.uid, it.policyFlags) }
+                        )
+                        if (pushRes.isSuccess) {
+                            initialTargetsSynced = true
+                        }
+                    } else {
+                        initialTargetsSynced = true
                     }
                 }
             }
@@ -705,6 +781,7 @@ object KurokoRuntime {
                 }
             }
         } else {
+            initialTargetsSynced = false
             rfConfigSynced = false
             val fallbackMsg = locCtx?.getString(R.string.daemon_unresponsive) ?: "Daemon unresponsive"
             val nextSnap = _snapshot.value.copy(
