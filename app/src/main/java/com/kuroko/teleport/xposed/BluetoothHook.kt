@@ -46,6 +46,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 object BluetoothHook {
     private const val TAG = "Kuroko-BT"
     private const val BT_INTERFACE = "android.bluetooth.IBluetooth"
+    private const val BT_ADAPTER_INTERFACE = "android.bluetooth.IAdapter"
     private const val BLE_EMIT_INTERVAL_MS = 1000L
     private const val REAL_DISCOVERY_GRACE_MS = 15_000L
 
@@ -202,6 +203,7 @@ object BluetoothHook {
                                 null
                             }
                             if (desc == BT_INTERFACE ||
+                                desc == BT_ADAPTER_INTERFACE ||
                                 (cn != null && cn.className.contains("Adapter", ignoreCase = true))
                             ) {
                                 updateCachedBluetoothBinder(binder, "BluetoothServiceConnection")
@@ -286,7 +288,12 @@ object BluetoothHook {
         val prev = ShmReader.cachedBluetoothBinder
         ShmReader.cachedBluetoothBinder = binder
         if (prev !== binder) {
-            XposedBridge.log("$TAG: Cached IBluetooth IBinder via $source")
+            val desc = try {
+                binder.interfaceDescriptor
+            } catch (_: Throwable) {
+                null
+            } ?: "?"
+            XposedBridge.log("$TAG: Cached Bluetooth IBinder via $source (desc=$desc)")
         }
     }
 
@@ -332,29 +339,53 @@ object BluetoothHook {
 
     private fun isIBluetoothBinder(binder: IBinder): Boolean {
         return try {
-            binder.isBinderAlive && binder.interfaceDescriptor == BT_INTERFACE
+            val desc = binder.interfaceDescriptor
+            binder.isBinderAlive && (desc == BT_INTERFACE || desc == BT_ADAPTER_INTERFACE)
         } catch (_: Throwable) {
             false
         }
     }
 
+    private fun resolveStubDescriptor(cls: Class<*>, fallback: String): String {
+        var cur: Class<*>? = cls
+        while (cur != null && cur != Any::class.java) {
+            try {
+                val f = cur.getDeclaredField("DESCRIPTOR")
+                f.isAccessible = true
+                val v = f.get(null) as? String
+                if (!v.isNullOrBlank()) return v
+            } catch (_: Throwable) {
+            }
+            val name = cur.name
+            if (name.endsWith("\$Stub")) {
+                return name.removeSuffix("\$Stub")
+            }
+            cur = cur.superclass
+        }
+        return fallback
+    }
+
     // ==================== Half 2: com.android.bluetooth Process ====================
 
     fun initBluetoothProcess(cl: ClassLoader) {
-        // 1. Hook IBluetooth onTransact to receive SHM v2 memfd & PING from root kuroko_daemon
-        var txHooked = false
-        for (binderClassName in listOf(
-            "com.android.bluetooth.btservice.AdapterBinder",
-            "com.android.bluetooth.btservice.AdapterServiceBinder",
-            "com.android.bluetooth.btservice.AdapterService\$AdapterServiceBinder"
-        )) {
-            if (ShmReader.hookServiceOnTransact(binderClassName, cl, BT_INTERFACE)) {
-                txHooked = true
-                break
+        // 1. Hook ALL present Bluetooth Adapter Binder classes (Android 17 splits IAdapter on
+        //    AdapterBinder from IBluetooth on AdapterServiceBinder; Android 12–16 uses IBluetooth).
+        //    Never break after the first class so both IBluetooth and IAdapter accept SET_SHM/PING.
+        var hookedBinderCount = 0
+        val binderCandidates = listOf(
+            "com.android.bluetooth.btservice.AdapterServiceBinder" to BT_INTERFACE,
+            "com.android.bluetooth.btservice.AdapterService\$AdapterServiceBinder" to BT_INTERFACE,
+            "com.android.bluetooth.btservice.AdapterBinder" to BT_ADAPTER_INTERFACE
+        )
+        for ((binderClassName, fallbackDesc) in binderCandidates) {
+            val cls = XposedHelpers.findClassIfExists(binderClassName, cl) ?: continue
+            val ifaceDesc = resolveStubDescriptor(cls, fallbackDesc)
+            if (ShmReader.hookServiceOnTransact(binderClassName, cl, ifaceDesc)) {
+                hookedBinderCount++
             }
         }
-        if (!txHooked) {
-            XposedBridge.log("$TAG: Warning — no IBluetooth AdapterBinder class found for onTransact")
+        if (hookedBinderCount == 0) {
+            XposedBridge.log("$TAG: Warning — no Bluetooth Adapter Binder class found for onTransact")
         }
 
         // 2. Resolve ScanRecord.parseFromBytes reflection helper

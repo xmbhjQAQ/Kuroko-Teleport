@@ -434,6 +434,7 @@ struct BinderNdkApi {
     AIBinder_Class* clazzLocation = nullptr;
     AIBinder_Class* clazzPhone = nullptr;
     AIBinder_Class* clazzBluetooth = nullptr;
+    AIBinder_Class* clazzBluetoothAdapter = nullptr;
 
     bool init() {
         handle = dlopen("libbinder_ndk.so", RTLD_NOW);
@@ -462,17 +463,30 @@ struct BinderNdkApi {
                                      binder_stub_on_create, binder_stub_on_destroy, binder_stub_on_transact);
         clazzPhone     = classDefine("com.android.internal.telephony.ITelephony",
                                      binder_stub_on_create, binder_stub_on_destroy, binder_stub_on_transact);
-        clazzBluetooth = classDefine("android.bluetooth.IBluetooth",
-                                     binder_stub_on_create, binder_stub_on_destroy, binder_stub_on_transact);
+        clazzBluetooth        = classDefine("android.bluetooth.IBluetooth",
+                                            binder_stub_on_create, binder_stub_on_destroy, binder_stub_on_transact);
+        clazzBluetoothAdapter = classDefine("android.bluetooth.IAdapter",
+                                            binder_stub_on_create, binder_stub_on_destroy, binder_stub_on_transact);
         if (!clazzLocation || !clazzPhone) {
             LOGE("AIBinder_Class_define failed (location=%p phone=%p)", clazzLocation, clazzPhone);
             return false;
         }
-        if (!clazzBluetooth || !readStrongBinder) {
-            LOGW("Optional Bluetooth binder bridge unavailable (clazz=%p readStrongBinder=%p)",
-                 clazzBluetooth, reinterpret_cast<void*>(readStrongBinder));
+        if ((!clazzBluetooth && !clazzBluetoothAdapter) || !readStrongBinder) {
+            LOGW("Optional Bluetooth binder bridge unavailable (bt=%p adapter=%p readStrongBinder=%p)",
+                 clazzBluetooth, clazzBluetoothAdapter, reinterpret_cast<void*>(readStrongBinder));
         }
         return true;
+    }
+
+    const AIBinder_Class* resolve_bluetooth_class(AIBinder* b) {
+        if (!b) return nullptr;
+        if (clazzBluetooth && associateClass(b, clazzBluetooth)) {
+            return clazzBluetooth;
+        }
+        if (clazzBluetoothAdapter && associateClass(b, clazzBluetoothAdapter)) {
+            return clazzBluetoothAdapter;
+        }
+        return nullptr;
     }
 
     int32_t ping_binder(AIBinder* b, const AIBinder_Class* clazz, const char* label,
@@ -571,7 +585,7 @@ struct BinderNdkApi {
     }
 
     AIBinder* query_bluetooth_binder() {
-        if (!readStrongBinder || !clazzBluetooth || !clazzLocation) return nullptr;
+        if (!readStrongBinder || (!clazzBluetooth && !clazzBluetoothAdapter) || !clazzLocation) return nullptr;
         AIBinder* loc = checkService("location");
         if (!loc) return nullptr;
         if (!associateClass(loc, clazzLocation)) {
@@ -617,6 +631,7 @@ void binder_pusher_loop() {
     };
     bool pushed[2] = {false, false};
     bool bt_pushed = false;
+    int32_t last_bt_fail_state = 1;
     int32_t prev_sensor_state = -1;
     std::string prev_diag_key;
     bool logged_first_diag = false;
@@ -687,13 +702,16 @@ void binder_pusher_loop() {
             }
         }
 
-        // Optional Bluetooth SHM handoff via system_server cached IBluetooth binder
+        // Optional Bluetooth SHM handoff via system_server cached IBluetooth/IAdapter binder
         if (pushed[0]) {
             AIBinder* bt = api.query_bluetooth_binder();
             if (bt) {
-                int32_t bt_state = api.ping_binder(bt, api.clazzBluetooth, "bluetooth",
-                                                   nullptr, nullptr, /*quiet=*/true);
+                const AIBinder_Class* bt_clazz = api.resolve_bluetooth_class(bt);
+                int32_t bt_state = bt_clazz
+                    ? api.ping_binder(bt, bt_clazz, "bluetooth", nullptr, nullptr, /*quiet=*/true)
+                    : -2;
                 if (bt_state == 1) {
+                    last_bt_fail_state = 1;
                     g_bt_shm_ok.store(true, std::memory_order_relaxed);
                     if (!bt_pushed) {
                         LOGI("Service 'bluetooth' reports SHM already mapped");
@@ -701,22 +719,30 @@ void binder_pusher_loop() {
                                          g_memfd_ro);
                         bt_pushed = true;
                     }
-                } else if (bt_state == 0) {
+                } else if (bt_state == 0 && bt_clazz) {
                     bt_pushed = false;
                     g_bt_shm_ok.store(false, std::memory_order_relaxed);
-                    if (api.push_shm_to_binder(bt, api.clazzBluetooth, "bluetooth", g_memfd_ro, /*quiet=*/true)) {
+                    if (api.push_shm_to_binder(bt, bt_clazz, "bluetooth", g_memfd_ro, /*quiet=*/true)) {
+                        last_bt_fail_state = 1;
                         LOGI("Successfully pushed read-only memfd=%d to Binder service 'bluetooth'",
                              g_memfd_ro);
                         write_daemon_log(false, "binder_handoff ok service=bluetooth mode=pushed memfd_ro=%d",
                                          g_memfd_ro);
                         bt_pushed = true;
                         g_bt_shm_ok.store(true, std::memory_order_relaxed);
+                    } else if (last_bt_fail_state != -3) {
+                        last_bt_fail_state = -3;
+                        write_daemon_log(false, "binder_handoff warn service=bluetooth push_failed memfd_ro=%d",
+                                         g_memfd_ro);
                     }
                 } else {
                     if (bt_pushed) {
                         LOGI("Service 'bluetooth' hook unreachable (state=%d); marking bt_shm=0", bt_state);
                         write_daemon_log(false, "binder_handoff lost service=bluetooth state=%d", bt_state);
                         bt_pushed = false;
+                    } else if (bt_state != last_bt_fail_state) {
+                        last_bt_fail_state = bt_state;
+                        write_daemon_log(false, "binder_handoff warn service=bluetooth state=%d", bt_state);
                     }
                     g_bt_shm_ok.store(false, std::memory_order_relaxed);
                 }
@@ -727,10 +753,12 @@ void binder_pusher_loop() {
                     write_daemon_log(false, "binder_handoff cleared service=bluetooth");
                     bt_pushed = false;
                 }
+                last_bt_fail_state = 1;
                 g_bt_shm_ok.store(false, std::memory_order_relaxed);
             }
         } else {
             bt_pushed = false;
+            last_bt_fail_state = 1;
             g_bt_shm_ok.store(false, std::memory_order_relaxed);
         }
 
