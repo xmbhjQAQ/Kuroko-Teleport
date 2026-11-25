@@ -6,6 +6,7 @@ import android.os.IBinder
 import android.os.IInterface
 import android.os.RemoteException
 import android.telephony.ServiceState
+import android.telephony.SubscriptionInfo
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
@@ -49,14 +50,22 @@ object TelephonyHook {
         @Volatile var lastPushedCellEpoch: Int = -1
     )
 
+    private class TrackedSubCallback(
+        val binder: IBinder,
+        @Volatile var proxy: Any,
+        @Volatile var uid: Int,
+        @Volatile var lastPushedSimKey: String? = null
+    )
+
     private val loggedOnceKeys = ConcurrentHashMap.newKeySet<String>()
     private val fieldCache = ConcurrentHashMap<String, Field>()
     private val methodCache = ConcurrentHashMap<String, Method>()
     private val telPumpStarted = AtomicBoolean(false)
 
-    // Weak map from IPhoneStateListener IBinder -> callerUid (auto-cleaned on listener GC)
+    // Weak maps from Binder -> callerUid / tracked callback (auto-cleaned on GC)
     private val callbackBinderToUid = Collections.synchronizedMap(WeakHashMap<IBinder, Int>())
     private val trackedCallbacks = Collections.synchronizedMap(WeakHashMap<IBinder, TrackedTelCallback>())
+    private val trackedSubCallbacks = Collections.synchronizedMap(WeakHashMap<IBinder, TrackedSubCallback>())
 
     @Volatile
     private var latestRealServiceState: ServiceState? = null
@@ -111,6 +120,10 @@ object TelephonyHook {
 
         // 6. Per-UID network/SIM operator & country ISO + ServiceState getters (SPOOF_CELL only)
         hookOperatorAndCountryGetters(pimClass)
+
+        // 7. Per-UID SubscriptionInfo rewriting on ISub (SubscriptionManagerService / SubscriptionController)
+        //    so enabling Local SIM Country Sync rewrites SIM/Carrier name, country ISO & MCC/MNC per-UID.
+        hookSubscriptionService(cl)
     }
 
     private fun hookGetAllCellInfo(pimClass: Class<*>) {
@@ -287,7 +300,11 @@ object TelephonyHook {
         val simAlphaNames = setOf(
             "getSimOperatorName",
             "getSimOperatorNameForPhone",
-            "getSimOperatorNameForSubId"
+            "getSimOperatorNameForSubId",
+            "getSimCarrierIdName",
+            "getSimSpecificCarrierIdName",
+            "getSubscriptionCarrierIdName",
+            "getCarrierName"
         )
         val serviceStateNames = setOf("getServiceStateForSubscriber", "getServiceState")
 
@@ -366,6 +383,94 @@ object TelephonyHook {
             logOnce("hook_tel_id", "Failed hooking PhoneInterfaceManager operator/country getters: $t")
         }
         XposedBridge.log("$TAG: Hooked PhoneInterfaceManager identity/ServiceState getters ($hookedIdentityCount)")
+    }
+
+    private fun hookSubscriptionService(cl: ClassLoader) {
+        val candidateClasses = listOf(
+            "com.android.internal.telephony.subscription.SubscriptionManagerService", // Android 14–17
+            "com.android.internal.telephony.SubscriptionController"                   // Android 12–13
+        )
+        val subGetterNames = setOf(
+            "getActiveSubscriptionInfoList",
+            "getActiveSubInfoList",
+            "getActiveSubscriptionInfo",
+            "getActiveSubscriptionInfoForSimSlotIndex",
+            "getActiveSubscriptionInfoForIccId",
+            "getAllSubInfoList",
+            "getAllSubscriptionInfoList",
+            "getAccessibleSubscriptionInfoList",
+            "getAvailableSubscriptionInfoList",
+            "getCompleteActiveSubscriptionInfoList",
+            "getSubscriptionInfo"
+        )
+        var totalHooked = 0
+        for (clsName in candidateClasses) {
+            val svcCls = XposedHelpers.findClassIfExists(clsName, cl) ?: continue
+            val presentNames = HashSet<String>()
+            var cur: Class<*>? = svcCls
+            while (cur != null && cur != Any::class.java) {
+                for (m in cur.declaredMethods) {
+                    presentNames.add(m.name)
+                }
+                cur = cur.superclass
+            }
+            var clsHooked = 0
+            for (methodName in subGetterNames) {
+                if (methodName !in presentNames) continue
+                try {
+                    val hooks = XposedBridge.hookAllMethods(svcCls, methodName, object : XC_MethodHook() {
+                        override fun beforeHookedMethod(param: MethodHookParam) {
+                            param.setObjectExtra("kuroko_uid", Binder.getCallingUid())
+                        }
+
+                        override fun afterHookedMethod(param: MethodHookParam) {
+                            try {
+                                if (param.throwable != null) return
+                                val res = param.result ?: return
+                                val uid = (param.getObjectExtra("kuroko_uid") as? Int) ?: Binder.getCallingUid()
+                                if (cellModeForUid(uid) != CellMode.SPOOF) return
+                                val header = ShmReader.readRfHeader() ?: return
+                                if ((header.rfFlags and ShmReader.KUROKO_RF_FLAG_SPOOF_SIM_COUNTRY) == 0) return
+
+                                when (res) {
+                                    is SubscriptionInfo -> {
+                                        param.result = VirtualCellBuilder.rewriteSubscriptionInfo(res, header)
+                                    }
+                                    is List<*> -> {
+                                        if (res.isEmpty()) return
+                                        var changed = false
+                                        val out = ArrayList<Any?>(res.size)
+                                        for (item in res) {
+                                            if (item is SubscriptionInfo) {
+                                                out.add(VirtualCellBuilder.rewriteSubscriptionInfo(item, header))
+                                                changed = true
+                                            } else {
+                                                out.add(item)
+                                            }
+                                        }
+                                        if (changed) {
+                                            param.result = out
+                                        }
+                                    }
+                                }
+                            } catch (t: Throwable) {
+                                logOnce("sub_svc_$methodName", "$methodName hook error: $t")
+                            }
+                        }
+                    })
+                    clsHooked += hooks.size
+                } catch (t: Throwable) {
+                    logOnce("hook_sub_$methodName", "Failed hooking $clsName.$methodName: $t")
+                }
+            }
+            if (clsHooked > 0) {
+                totalHooked += clsHooked
+                XposedBridge.log("$TAG: Hooked ${svcCls.simpleName} SubscriptionInfo getters ($clsHooked)")
+            }
+        }
+        if (totalHooked == 0) {
+            XposedBridge.log("$TAG: No SubscriptionManagerService/SubscriptionController getters hooked")
+        }
     }
 
     // ==================== Process 2: system_server ====================
@@ -488,6 +593,55 @@ object TelephonyHook {
                             trackedCallbacks.remove(binder)
                         }
                         callbackBinderToUid.remove(binder)
+                    } catch (_: Throwable) {
+                    }
+                }
+            })
+        } catch (_: Throwable) {
+        }
+
+        // 2b. Track IOnSubscriptionsChangedListener registrations so toggling Local SIM Country Sync
+        //     or switching regions notifies apps (e.g. Cellular-Z) to re-fetch SubscriptionInfo live.
+        for (addSubName in listOf(
+            "addOnSubscriptionsChangedListener",
+            "addOnSubscriptionsChangedListenerWithFeature"
+        )) {
+            try {
+                XposedBridge.hookAllMethods(regClass, addSubName, object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        try {
+                            val uid = Binder.getCallingUid()
+                            if (uid < 10000) return
+                            val args = param.args ?: return
+                            val cb = args.firstOrNull { it is IInterface } as? IInterface ?: return
+                            val binder = cb.asBinder() ?: return
+                            if (!binder.isBinderAlive) return
+                            synchronized(trackedSubCallbacks) {
+                                val existing = trackedSubCallbacks[binder]
+                                if (existing != null) {
+                                    existing.proxy = cb
+                                    existing.uid = uid
+                                } else {
+                                    trackedSubCallbacks[binder] = TrackedSubCallback(binder, cb, uid)
+                                }
+                            }
+                        } catch (_: Throwable) {
+                        }
+                    }
+                })
+            } catch (_: Throwable) {
+            }
+        }
+        try {
+            XposedBridge.hookAllMethods(regClass, "removeOnSubscriptionsChangedListener", object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    try {
+                        val args = param.args ?: return
+                        val cb = args.firstOrNull { it is IInterface } as? IInterface ?: return
+                        val binder = cb.asBinder() ?: return
+                        synchronized(trackedSubCallbacks) {
+                            trackedSubCallbacks.remove(binder)
+                        }
                     } catch (_: Throwable) {
                     }
                 }
@@ -699,7 +853,8 @@ object TelephonyHook {
         val srv = cells.firstOrNull { it.registered } ?: cells.firstOrNull()
         val srvCi = srv?.ci ?: 0L
         val srvRat = srv?.rat ?: 0
-        return "${header.carrierMcc}-${header.carrierMnc}-${header.mncDigits}-${header.countryIso}-${header.carrierAlpha}-$srvRat-$srvCi"
+        val spoofSim = if ((header.rfFlags and ShmReader.KUROKO_RF_FLAG_SPOOF_SIM_COUNTRY) != 0) 1 else 0
+        return "${header.carrierMcc}-${header.carrierMnc}-${header.mncDigits}-${header.countryIso}-${header.carrierAlpha}-$srvRat-$srvCi-$spoofSim"
     }
 
     private fun startTelephonyChangePump() {
@@ -723,9 +878,13 @@ object TelephonyHook {
 
     private fun runTelephonyPumpTick() {
         val snapshotList: List<TrackedTelCallback> = synchronized(trackedCallbacks) {
-            if (trackedCallbacks.isEmpty()) return
-            ArrayList(trackedCallbacks.values)
+            if (trackedCallbacks.isEmpty()) emptyList() else ArrayList(trackedCallbacks.values)
         }
+        val subSnapshotList: List<TrackedSubCallback> = synchronized(trackedSubCallbacks) {
+            if (trackedSubCallbacks.isEmpty()) emptyList() else ArrayList(trackedSubCallbacks.values)
+        }
+        if (snapshotList.isEmpty() && subSnapshotList.isEmpty()) return
+
         val pair = ShmReader.readCellsWithHeader()
         val plmnKey = if (pair != null) plmnStateKey(pair.first, pair.second) else null
 
@@ -827,6 +986,65 @@ object TelephonyHook {
                     trackedCallbacks.remove(b)
                 }
             }
+        }
+
+        // Notify IOnSubscriptionsChangedListener callbacks when SIM spoof state or region changes
+        if (subSnapshotList.isNotEmpty()) {
+            val deadSubBinders = ArrayList<IBinder>()
+            for (scb in subSnapshotList) {
+                if (!scb.binder.isBinderAlive) {
+                    deadSubBinders.add(scb.binder)
+                    continue
+                }
+                val mode = cellModeForUid(scb.uid)
+                val hdr = pair?.first
+                val simKey = if (mode == CellMode.SPOOF &&
+                    hdr != null &&
+                    (hdr.rfFlags and ShmReader.KUROKO_RF_FLAG_SPOOF_SIM_COUNTRY) != 0
+                ) {
+                    "${hdr.carrierMcc}-${hdr.carrierMnc}-${hdr.mncDigits}-${hdr.countryIso}-${hdr.carrierAlpha}"
+                } else {
+                    "REAL"
+                }
+                val prev = scb.lastPushedSimKey
+                if (prev == null) {
+                    scb.lastPushedSimKey = simKey
+                    if (simKey != "REAL" && !invokeZeroArgProxyMethod(scb.proxy, "onSubscriptionsChanged")) {
+                        deadSubBinders.add(scb.binder)
+                    }
+                } else if (prev != simKey) {
+                    scb.lastPushedSimKey = simKey
+                    if (!invokeZeroArgProxyMethod(scb.proxy, "onSubscriptionsChanged")) {
+                        deadSubBinders.add(scb.binder)
+                    }
+                }
+            }
+            if (deadSubBinders.isNotEmpty()) {
+                synchronized(trackedSubCallbacks) {
+                    for (b in deadSubBinders) {
+                        trackedSubCallbacks.remove(b)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun invokeZeroArgProxyMethod(proxy: Any, methodName: String): Boolean {
+        val m = findMethodByName(proxy.javaClass, methodName, 0) ?: return true
+        inOurTelPump.set(true)
+        return try {
+            m.invoke(proxy)
+            true
+        } catch (t: Throwable) {
+            val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
+            if (cause is RemoteException) {
+                false
+            } else {
+                logOnce("tel_pump_inv0_$methodName", "Telephony pump $methodName error: $cause")
+                true
+            }
+        } finally {
+            inOurTelPump.set(false)
         }
     }
 

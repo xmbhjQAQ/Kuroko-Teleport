@@ -13,6 +13,7 @@ import android.telephony.CellSignalStrengthLte
 import android.telephony.CellSignalStrengthNr
 import android.telephony.NetworkRegistrationInfo
 import android.telephony.ServiceState
+import android.telephony.SubscriptionInfo
 import de.robv.android.xposed.XposedBridge
 import java.lang.reflect.Constructor
 import java.lang.reflect.Field
@@ -141,11 +142,84 @@ object VirtualCellBuilder {
             if (opNum.length >= 5) {
                 copy.setOperatorName(alpha, alpha, opNum)
             }
+            if ((header.rfFlags and ShmReader.KUROKO_RF_FLAG_SPOOF_SIM_COUNTRY) != 0) {
+                copy.roaming = false
+            }
             rewriteNriCellIdentities(copy, servingIdentity, opNum)
             copy
         } catch (t: Throwable) {
             logOnce("rewrite_ss", "rewriteServiceState warning: $t")
             orig
+        }
+    }
+
+    /**
+     * Clones [orig] into a new [SubscriptionInfo] with spoofed carrier name, display name,
+     * country ISO, and MCC/MNC (only called when KUROKO_RF_FLAG_SPOOF_SIM_COUNTRY is active).
+     * Never mutates [orig] so SubscriptionManagerService caches remain untouched for non-target apps.
+     */
+    fun rewriteSubscriptionInfo(
+        orig: SubscriptionInfo,
+        header: ShmReader.RfHeader
+    ): SubscriptionInfo {
+        val mccStr = header.mccString()
+        val mncStr = header.mncString()
+        val iso = header.countryIso
+        val alpha = header.carrierAlpha.ifEmpty { header.operatorNumeric() }
+        if (alpha.isEmpty() && iso.isEmpty()) return orig
+
+        // Primary path (Android 14–17): SubscriptionInfo.Builder(SubscriptionInfo) copy constructor
+        try {
+            val builderCls = Class.forName("android.telephony.SubscriptionInfo\$Builder", false, orig.javaClass.classLoader)
+            val copyCtor = builderCls.getDeclaredConstructor(SubscriptionInfo::class.java)
+            copyCtor.isAccessible = true
+            val builder = copyCtor.newInstance(orig)
+            if (alpha.isNotEmpty()) {
+                invokeSetter(builder, "setCarrierName", CharSequence::class.java, alpha)
+                invokeSetter(builder, "setDisplayName", CharSequence::class.java, alpha)
+            }
+            if (iso.isNotEmpty()) {
+                invokeSetter(builder, "setCountryIso", String::class.java, iso)
+            }
+            if (header.carrierMcc > 0) {
+                invokeSetter(builder, "setMcc", String::class.java, mccStr)
+                invokeSetter(builder, "setMnc", String::class.java, mncStr)
+            }
+            val buildMethod = findMethodByName(builderCls, "build", 0)
+            val built = buildMethod?.invoke(builder) as? SubscriptionInfo
+            if (built != null) return built
+        } catch (_: Throwable) {
+            // Fall back to Parcel clone + field reflection (Android 12–13 or OEM signature drift)
+        }
+
+        return try {
+            val cloned = cloneParcelable(orig, SubscriptionInfo.CREATOR) ?: return orig
+            if (alpha.isNotEmpty()) {
+                setFieldValue(cloned, "mCarrierName", alpha)
+                setFieldValue(cloned, "mDisplayName", alpha)
+            }
+            if (iso.isNotEmpty()) {
+                setFieldValue(cloned, "mCountryIso", iso)
+            }
+            if (header.carrierMcc > 0) {
+                setStringOrIntField(cloned, "mMcc", mccStr, header.carrierMcc)
+                setStringOrIntField(cloned, "mMnc", mncStr, header.carrierMnc)
+            }
+            cloned
+        } catch (t: Throwable) {
+            logOnce("rewrite_subinfo", "rewriteSubscriptionInfo warning: $t")
+            orig
+        }
+    }
+
+    private fun setStringOrIntField(obj: Any, name: String, strVal: String, intVal: Int) {
+        try {
+            val f = findField(obj.javaClass, name) ?: return
+            when (f.type) {
+                String::class.java -> f.set(obj, strVal)
+                Int::class.javaPrimitiveType, Int::class.javaObjectType -> f.set(obj, intVal)
+            }
+        } catch (_: Throwable) {
         }
     }
 
