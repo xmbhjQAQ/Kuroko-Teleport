@@ -1,20 +1,25 @@
 package com.kuroko.teleport.xposed
 
 import android.os.Binder
+import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.os.IInterface
 import android.os.RemoteException
+import android.telephony.CellIdentity
 import android.telephony.ServiceState
 import android.telephony.SubscriptionInfo
+import android.telephony.SubscriptionManager
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
+import java.lang.ref.WeakReference
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -36,12 +41,26 @@ object TelephonyHook {
     private const val TAG = "Kuroko-Tel"
     private const val TELEPHONY_INTERFACE = "com.android.internal.telephony.ITelephony"
 
+    // AOSP TelephonyCallback.EVENT_* constants (stored in TelephonyRegistry.Record.eventList & listenWithEventList int[])
+    private const val EVENT_SERVICE_STATE_CHANGED = 1
+    private const val EVENT_CELL_LOCATION_CHANGED = 5
+    private const val EVENT_CELL_INFO_CHANGED = 11
+
+    // Legacy PhoneStateListener.LISTEN_* bitmask constants (listen / listenForSubscriber)
+    private const val LISTEN_SERVICE_STATE = 0x01
+    private const val LISTEN_CELL_LOCATION = 0x10
+    private const val LISTEN_CELL_INFO = 0x400
+
     private enum class CellMode { PASS, HIDE, SPOOF }
 
     private class TrackedTelCallback(
         val binder: IBinder,
         @Volatile var proxy: Any,
         @Volatile var uid: Int,
+        @Volatile var registryRef: WeakReference<Any>,
+        @Volatile var recordRef: WeakReference<Any>,
+        @Volatile var subId: Int = -1,
+        @Volatile var phoneId: Int = -1,
         @Volatile var wantsServiceState: Boolean = false,
         @Volatile var wantsCellInfo: Boolean = false,
         @Volatile var wantsCellLocation: Boolean = false,
@@ -54,27 +73,44 @@ object TelephonyHook {
         val binder: IBinder,
         @Volatile var proxy: Any,
         @Volatile var uid: Int,
+        @Volatile var registryRef: WeakReference<Any>,
+        @Volatile var recordRef: WeakReference<Any>,
         @Volatile var lastPushedSimKey: String? = null
+    )
+
+    private class InitialReplayState(
+        @Volatile var sanitizedOrigSs: ServiceState? = null,
+        @Volatile var pushedPlmnKey: String? = null,
+        @Volatile var pushedCellEpoch: Int = -1
     )
 
     private val loggedOnceKeys = ConcurrentHashMap.newKeySet<String>()
     private val fieldCache = ConcurrentHashMap<String, Field>()
+    private val missingFields = ConcurrentHashMap.newKeySet<String>()
     private val methodCache = ConcurrentHashMap<String, Method>()
+    private val missingMethods = ConcurrentHashMap.newKeySet<String>()
     private val telPumpStarted = AtomicBoolean(false)
 
-    // Weak maps from Binder -> callerUid / tracked callback (auto-cleaned on GC)
+    // Live TelephonyRegistry instance(s) in system_server
+    private val activeRegistries = CopyOnWriteArraySet<Any>()
+
+    // Weak maps from Binder -> callerUid / accepted callback / transient initial-replay cache (auto-cleaned on GC)
     private val callbackBinderToUid = Collections.synchronizedMap(WeakHashMap<IBinder, Int>())
     private val trackedCallbacks = Collections.synchronizedMap(WeakHashMap<IBinder, TrackedTelCallback>())
     private val trackedSubCallbacks = Collections.synchronizedMap(WeakHashMap<IBinder, TrackedSubCallback>())
-
-    @Volatile
-    private var latestRealServiceState: ServiceState? = null
+    private val initialReplayCache = Collections.synchronizedMap(WeakHashMap<IBinder, InitialReplayState>())
 
     // Fallback context flag for TelephonyRegistry if checkFineLocationAccess/checkCoarseLocationAccess are absent
     private val inCellNotify = ThreadLocal.withInitial { false }
 
     // Re-entrancy guard for Kuroko-1Hz-Tel active push so we never overwrite real ServiceState with spoofed data
     private val inOurTelPump = ThreadLocal.withInitial { false }
+
+    // Guard so our own CellMode.HIDE hook does not distort true permission probing in isRecordLocationPermitted()
+    private val inPermProbe = ThreadLocal.withInitial { false }
+
+    // Guard so initialReplayCache is populated ONLY during synchronous initial replay inside listen*()
+    private val inListenCall = ThreadLocal.withInitial { false }
 
     private fun cellModeForUid(uid: Int): CellMode {
         if (uid <= 0) return CellMode.PASS
@@ -485,9 +521,19 @@ object TelephonyHook {
             return
         }
 
+        try {
+            XposedBridge.hookAllConstructors(regClass, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    registerActiveRegistry(param.thisObject)
+                }
+            })
+        } catch (_: Throwable) {
+        }
+
         // 1. Per-Record location access gates: return false ONLY for HIDE_CELL && !SPOOF_CELL.
         //    SPOOF_CELL passes through so TelephonyRegistry invokes the Record's callback where
         //    our IPhoneStateListener proxy hook swaps in virtual cell/ServiceState data per-UID.
+        //    Respect inPermProbe so isRecordLocationPermitted() probes AOSP's true permission state.
         var locationGateHooks = 0
         try {
             for (m in regClass.declaredMethods) {
@@ -500,6 +546,8 @@ object TelephonyHook {
                 XposedBridge.hookMethod(m, object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         try {
+                            registerActiveRegistry(param.thisObject)
+                            if (inPermProbe.get() == true) return
                             val record = param.args.firstOrNull() ?: return
                             val uid = extractRecordUid(record)
                             if (cellModeForUid(uid) == CellMode.HIDE) {
@@ -516,14 +564,16 @@ object TelephonyHook {
             logOnce("hook_reg_gates", "Failed hooking TelephonyRegistry location gates: $t")
         }
 
-        // 2. Track listener registration & unregistration so callback IBinder -> callerUid is known
-        //    BEFORE initial replay, and evicted immediately when an app unregisters its callback.
+        // 2. Track ONLY system-accepted listener registrations (verified against mRecords in
+        //    afterHookedMethod). beforeHookedMethod ONLY handles immediate unregistration or sets
+        //    a transient callbackBinderToUid hint for synchronous initial replay inside listen*.
         var listenHooks = 0
         for (listenName in listOf("listenWithEventList", "listenForSubscriber", "listen")) {
             try {
                 val hooks = XposedBridge.hookAllMethods(regClass, listenName, object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         try {
+                            registerActiveRegistry(param.thisObject)
                             val uid = Binder.getCallingUid()
                             if (uid <= 0) return
                             val args = param.args ?: return
@@ -537,7 +587,6 @@ object TelephonyHook {
                                 }
                             }
                             if (listenName != "listenWithEventList" && eventsArr == null) {
-                                // Legacy listen(..., int events, ...) passes bitmask as the Int after callback
                                 val cbIdx = args.indexOfFirst { it is IInterface }
                                 if (cbIdx >= 0 && cbIdx + 1 < args.size) {
                                     legacyEventMask = args[cbIdx + 1] as? Int
@@ -548,35 +597,124 @@ object TelephonyHook {
 
                             val isUnregister = (eventsArr != null && eventsArr.isEmpty()) ||
                                 (legacyEventMask != null && legacyEventMask == 0)
+                            param.setObjectExtra("kuroko_tel_uid", uid)
+                            param.setObjectExtra("kuroko_tel_cb", cb)
+                            param.setObjectExtra("kuroko_tel_binder", binder)
+                            param.setObjectExtra("kuroko_tel_events", eventsArr)
+                            param.setObjectExtra("kuroko_tel_mask", legacyEventMask)
+                            param.setObjectExtra("kuroko_tel_unreg", isUnregister)
+
                             if (isUnregister) {
-                                synchronized(trackedCallbacks) {
-                                    trackedCallbacks.remove(binder)
-                                }
-                                callbackBinderToUid.remove(binder)
+                                evictCallbackBinder(binder)
                                 return
                             }
 
+                            // Transient UID hint only (do NOT add to trackedCallbacks until accepted in afterHookedMethod!)
                             callbackBinderToUid[binder] = uid
-                            if (latestRealServiceState == null) {
-                                captureRegistryServiceState(param.thisObject)
+                            initialReplayCache.remove(binder)
+                            val prevInListen = inListenCall.get() == true
+                            param.setObjectExtra("kuroko_prev_listen", prevInListen)
+                            inListenCall.set(true)
+                        } catch (_: Throwable) {
+                        }
+                    }
+
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val prevInListen = param.getObjectExtra("kuroko_prev_listen") as? Boolean
+                        try {
+                            val binder = param.getObjectExtra("kuroko_tel_binder") as? IBinder ?: return
+                            val isUnregister = (param.getObjectExtra("kuroko_tel_unreg") as? Boolean) ?: false
+                            if (isUnregister) return
+
+                            val replay = initialReplayCache.remove(binder)
+                            if (param.throwable != null) {
+                                evictCallbackBinder(binder)
+                                return
                             }
-                            if (eventsArr != null) {
-                                val wantsSs = eventsArr.contains(1)       // EVENT_SERVICE_STATE_CHANGED
-                                val wantsCellInfo = eventsArr.contains(11) // EVENT_CELL_INFO_CHANGED
-                                val wantsCellLoc = eventsArr.contains(16)  // EVENT_CELL_LOCATION_CHANGED
-                                if (wantsSs || wantsCellInfo || wantsCellLoc) {
-                                    recordTrackedCallback(cb, uid)?.let { tracked ->
-                                        tracked.wantsServiceState = wantsSs
-                                        tracked.wantsCellInfo = wantsCellInfo
-                                        tracked.wantsCellLocation = wantsCellLoc
+
+                            val registry = param.thisObject ?: run {
+                                evictCallbackBinder(binder)
+                                return
+                            }
+                            val liveRecord = findLiveRecord(registry, binder)
+                            if (liveRecord == null) {
+                                // TelephonyRegistry rejected or did not retain this registration
+                                evictCallbackBinder(binder)
+                                return
+                            }
+
+                            val cb = param.getObjectExtra("kuroko_tel_cb") as? IInterface ?: return
+                            val callingUid = (param.getObjectExtra("kuroko_tel_uid") as? Int) ?: -1
+                            val recUid = extractRecordUid(liveRecord).takeIf { it > 0 } ?: callingUid
+                            if (recUid <= 0) {
+                                evictCallbackBinder(binder)
+                                return
+                            }
+                            callbackBinderToUid[binder] = recUid
+                            if (recUid < 10000 || !binder.isBinderAlive) {
+                                synchronized(trackedCallbacks) {
+                                    trackedCallbacks.remove(binder)
+                                }
+                                return
+                            }
+
+                            val eventsArr = param.getObjectExtra("kuroko_tel_events") as? IntArray
+                            val legacyMask = param.getObjectExtra("kuroko_tel_mask") as? Int
+                            val (wantsSs, wantsCellInfo, wantsCellLoc) =
+                                extractAcceptedEvents(registry, liveRecord, eventsArr, legacyMask)
+                            if (!wantsSs && !wantsCellInfo && !wantsCellLoc) {
+                                synchronized(trackedCallbacks) {
+                                    trackedCallbacks.remove(binder)
+                                }
+                                return
+                            }
+
+                            val subId = extractRecordSubId(liveRecord)
+                            val phoneId = extractRecordPhoneId(registry, liveRecord)
+                            synchronized(trackedCallbacks) {
+                                val existing = trackedCallbacks[binder]
+                                if (existing != null) {
+                                    existing.proxy = cb
+                                    existing.uid = recUid
+                                    existing.registryRef = WeakReference(registry)
+                                    existing.recordRef = WeakReference(liveRecord)
+                                    existing.subId = subId
+                                    existing.phoneId = phoneId
+                                    existing.wantsServiceState = wantsSs
+                                    existing.wantsCellInfo = wantsCellInfo
+                                    existing.wantsCellLocation = wantsCellLoc
+                                    if (replay?.sanitizedOrigSs != null) {
+                                        existing.lastOrigServiceState = replay.sanitizedOrigSs
+                                    }
+                                    if (replay?.pushedPlmnKey != null) {
+                                        existing.lastPushedPlmnKey = replay.pushedPlmnKey
+                                    }
+                                    if (replay != null && replay.pushedCellEpoch >= 0) {
+                                        existing.lastPushedCellEpoch = replay.pushedCellEpoch
                                     }
                                 } else {
-                                    synchronized(trackedCallbacks) {
-                                        trackedCallbacks.remove(binder)
-                                    }
+                                    trackedCallbacks[binder] = TrackedTelCallback(
+                                        binder = binder,
+                                        proxy = cb,
+                                        uid = recUid,
+                                        registryRef = WeakReference(registry),
+                                        recordRef = WeakReference(liveRecord),
+                                        subId = subId,
+                                        phoneId = phoneId,
+                                        wantsServiceState = wantsSs,
+                                        wantsCellInfo = wantsCellInfo,
+                                        wantsCellLocation = wantsCellLoc,
+                                        lastOrigServiceState = replay?.sanitizedOrigSs,
+                                        lastPushedPlmnKey = replay?.pushedPlmnKey,
+                                        lastPushedCellEpoch = replay?.pushedCellEpoch ?: -1
+                                    )
                                 }
                             }
                         } catch (_: Throwable) {
+                        } finally {
+                            if (prevInListen != null) {
+                                inListenCall.set(prevInListen)
+                            }
                         }
                     }
                 })
@@ -589,10 +727,10 @@ object TelephonyHook {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     try {
                         val binder = param.args?.firstOrNull() as? IBinder ?: return
-                        synchronized(trackedCallbacks) {
-                            trackedCallbacks.remove(binder)
+                        evictCallbackBinder(binder)
+                        synchronized(trackedSubCallbacks) {
+                            trackedSubCallbacks.remove(binder)
                         }
-                        callbackBinderToUid.remove(binder)
                     } catch (_: Throwable) {
                     }
                 }
@@ -600,8 +738,9 @@ object TelephonyHook {
         } catch (_: Throwable) {
         }
 
-        // 2b. Track IOnSubscriptionsChangedListener registrations so toggling Local SIM Country Sync
-        //     or switching regions notifies apps (e.g. cell monitor apps) to re-fetch SubscriptionInfo live.
+        // 2b. Track ONLY system-accepted IOnSubscriptionsChangedListener registrations (verified in
+        //     afterHookedMethod against mRecords) so toggling Local SIM Country Sync or switching
+        //     regions notifies accepted apps (e.g. cell monitor apps) to re-fetch SubscriptionInfo live.
         for (addSubName in listOf(
             "addOnSubscriptionsChangedListener",
             "addOnSubscriptionsChangedListenerWithFeature"
@@ -610,19 +749,60 @@ object TelephonyHook {
                 XposedBridge.hookAllMethods(regClass, addSubName, object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         try {
+                            registerActiveRegistry(param.thisObject)
                             val uid = Binder.getCallingUid()
                             if (uid < 10000) return
                             val args = param.args ?: return
                             val cb = args.firstOrNull { it is IInterface } as? IInterface ?: return
                             val binder = cb.asBinder() ?: return
-                            if (!binder.isBinderAlive) return
+                            param.setObjectExtra("kuroko_sub_uid", uid)
+                            param.setObjectExtra("kuroko_sub_cb", cb)
+                            param.setObjectExtra("kuroko_sub_binder", binder)
+                        } catch (_: Throwable) {
+                        }
+                    }
+
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        try {
+                            val binder = param.getObjectExtra("kuroko_sub_binder") as? IBinder ?: return
+                            if (param.throwable != null) {
+                                synchronized(trackedSubCallbacks) {
+                                    trackedSubCallbacks.remove(binder)
+                                }
+                                return
+                            }
+                            val registry = param.thisObject ?: return
+                            val liveRecord = findLiveRecord(registry, binder)
+                            if (liveRecord == null) {
+                                synchronized(trackedSubCallbacks) {
+                                    trackedSubCallbacks.remove(binder)
+                                }
+                                return
+                            }
+                            val cb = param.getObjectExtra("kuroko_sub_cb") as? IInterface ?: return
+                            val callingUid = (param.getObjectExtra("kuroko_sub_uid") as? Int) ?: -1
+                            val recUid = extractRecordUid(liveRecord).takeIf { it > 0 } ?: callingUid
+                            if (recUid < 10000 || !binder.isBinderAlive) {
+                                synchronized(trackedSubCallbacks) {
+                                    trackedSubCallbacks.remove(binder)
+                                }
+                                return
+                            }
                             synchronized(trackedSubCallbacks) {
                                 val existing = trackedSubCallbacks[binder]
                                 if (existing != null) {
                                     existing.proxy = cb
-                                    existing.uid = uid
+                                    existing.uid = recUid
+                                    existing.registryRef = WeakReference(registry)
+                                    existing.recordRef = WeakReference(liveRecord)
                                 } else {
-                                    trackedSubCallbacks[binder] = TrackedSubCallback(binder, cb, uid)
+                                    trackedSubCallbacks[binder] = TrackedSubCallback(
+                                        binder = binder,
+                                        proxy = cb,
+                                        uid = recUid,
+                                        registryRef = WeakReference(registry),
+                                        recordRef = WeakReference(liveRecord)
+                                    )
                                 }
                             }
                         } catch (_: Throwable) {
@@ -664,15 +844,7 @@ object TelephonyHook {
                 val hooks = XposedBridge.hookAllMethods(regClass, name, object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         try {
-                            val args = param.args ?: return
-                            if (name == "notifyServiceStateForSubscriber") {
-                                for (arg in args) {
-                                    if (arg is ServiceState) {
-                                        latestRealServiceState = ServiceState(arg)
-                                        break
-                                    }
-                                }
-                            }
+                            registerActiveRegistry(param.thisObject)
                             if (ShmReader.hasAnyTargetWithPolicy(ShmReader.KUROKO_POLICY_HIDE_CELL)) {
                                 inCellNotify.set(true)
                             }
@@ -709,18 +881,268 @@ object TelephonyHook {
         )
     }
 
-    private fun captureRegistryServiceState(registry: Any?) {
-        if (registry == null) return
-        try {
-            val arr = getFieldValue(registry, "mServiceState") as? Array<*> ?: return
-            for (item in arr) {
-                if (item is ServiceState) {
-                    latestRealServiceState = ServiceState(item)
-                    return
+    private fun registerActiveRegistry(registry: Any?) {
+        if (registry != null && !activeRegistries.contains(registry)) {
+            activeRegistries.add(registry)
+        }
+    }
+
+    private fun evictCallbackBinder(binder: IBinder) {
+        synchronized(trackedCallbacks) {
+            trackedCallbacks.remove(binder)
+        }
+        callbackBinderToUid.remove(binder)
+        initialReplayCache.remove(binder)
+    }
+
+    private fun findLiveRecord(registry: Any, binder: IBinder): Any? {
+        return try {
+            val records = getFieldValue(registry, "mRecords") as? Iterable<*> ?: return null
+            synchronized(records) {
+                for (rec in records) {
+                    if (rec == null) continue
+                    val recBinder = getFieldValue(rec, "binder") as? IBinder
+                    if (recBinder != null && (recBinder === binder || recBinder == binder)) {
+                        return rec
+                    }
+                    val cbBinder = (getFieldValue(rec, "callback") as? IInterface)?.asBinder()
+                    if (cbBinder != null && (cbBinder === binder || cbBinder == binder)) {
+                        return rec
+                    }
+                    val subCbBinder =
+                        (getFieldValue(rec, "onSubscriptionsChangedListenerCallback") as? IInterface)?.asBinder()
+                    if (subCbBinder != null && (subCbBinder === binder || subCbBinder == binder)) {
+                        return rec
+                    }
+                    val oppCbBinder =
+                        (getFieldValue(rec, "onOpportunisticSubscriptionsChangedListenerCallback") as? IInterface)
+                            ?.asBinder()
+                    if (oppCbBinder != null && (oppCbBinder === binder || oppCbBinder == binder)) {
+                        return rec
+                    }
                 }
             }
+            null
         } catch (_: Throwable) {
+            null
         }
+    }
+
+    private fun findLiveRegistryAndRecord(binder: IBinder): Pair<Any, Any>? {
+        for (reg in activeRegistries) {
+            val rec = findLiveRecord(reg, binder)
+            if (rec != null) return Pair(reg, rec)
+        }
+        return null
+    }
+
+    private fun findLocationAccessMethod(registryCls: Class<*>, recordCls: Class<*>, name: String): Method? {
+        val key = "${registryCls.name}#$name(${recordCls.name},int)"
+        methodCache[key]?.let { return it }
+        if (missingMethods.contains(key)) return null
+        var cur: Class<*>? = registryCls
+        while (cur != null && cur != Any::class.java) {
+            for (m in cur.declaredMethods) {
+                if (m.name == name &&
+                    m.parameterCount == 2 &&
+                    m.parameterTypes[0].isAssignableFrom(recordCls) &&
+                    m.parameterTypes[1] == Int::class.javaPrimitiveType &&
+                    m.returnType == Boolean::class.javaPrimitiveType
+                ) {
+                    m.isAccessible = true
+                    methodCache[key] = m
+                    return m
+                }
+            }
+            cur = cur.superclass
+        }
+        missingMethods.add(key)
+        return null
+    }
+
+    /**
+     * Probes AOSP TelephonyRegistry's live per-Record location permission checks
+     * (checkFineLocationAccess & checkCoarseLocationAccess at Build.VERSION_CODES.Q).
+     * Fails closed (false to false) if either method cannot be invoked.
+     */
+    private fun isRecordLocationPermitted(registry: Any, record: Any): Pair<Boolean, Boolean> {
+        val prevProbe = inPermProbe.get() == true
+        inPermProbe.set(true)
+        val token = Binder.clearCallingIdentity()
+        return try {
+            val fineMethod = findLocationAccessMethod(registry.javaClass, record.javaClass, "checkFineLocationAccess")
+            val coarseMethod =
+                findLocationAccessMethod(registry.javaClass, record.javaClass, "checkCoarseLocationAccess")
+            val hasFine = try {
+                if (fineMethod != null) {
+                    (fineMethod.invoke(registry, record, Build.VERSION_CODES.Q) as? Boolean) ?: false
+                } else {
+                    false
+                }
+            } catch (_: Throwable) {
+                false
+            }
+            val hasCoarse = try {
+                if (coarseMethod != null) {
+                    (coarseMethod.invoke(registry, record, Build.VERSION_CODES.Q) as? Boolean) ?: false
+                } else {
+                    false
+                }
+            } catch (_: Throwable) {
+                false
+            }
+            Pair(hasFine, hasCoarse)
+        } finally {
+            Binder.restoreCallingIdentity(token)
+            inPermProbe.set(prevProbe)
+        }
+    }
+
+    /**
+     * Applies AOSP TelephonyRegistry's exact per-receiver ServiceState location sanitization:
+     *  - hasFine == true -> full copy
+     *  - !hasFine && hasCoarse -> createLocationInfoSanitizedCopy(false)
+     *  - !hasFine && !hasCoarse -> createLocationInfoSanitizedCopy(true)
+     * Fails closed (returns null) if sanitization cannot be invoked when !hasFine.
+     */
+    private fun sanitizeServiceStateForReceiver(
+        ss: ServiceState,
+        hasFine: Boolean,
+        hasCoarse: Boolean
+    ): ServiceState? {
+        if (hasFine) {
+            return ServiceState(ss)
+        }
+        return try {
+            val m = findMethodByName(ss.javaClass, "createLocationInfoSanitizedCopy", 1)
+            if (m != null && m.parameterTypes[0] == Boolean::class.javaPrimitiveType) {
+                val removeCoarse = !hasCoarse
+                m.invoke(ss, removeCoarse) as? ServiceState
+            } else {
+                null
+            }
+        } catch (t: Throwable) {
+            logOnce("sanitize_ss_err", "ServiceState.createLocationInfoSanitizedCopy failed (fail-closed): $t")
+            null
+        }
+    }
+
+    private fun extractRecordSubId(record: Any): Int {
+        return (getFieldValue(record, "subId") as? Int) ?: SubscriptionManager.INVALID_SUBSCRIPTION_ID
+    }
+
+    private fun extractRecordPhoneId(registry: Any, record: Any): Int {
+        val rawPhoneId = (getFieldValue(record, "phoneId") as? Int) ?: -1
+        val subId = extractRecordSubId(record)
+        val isDefaultSub = (subId == SubscriptionManager.DEFAULT_SUBSCRIPTION_ID)
+        val isDefaultPhone = (rawPhoneId == Int.MAX_VALUE) // SubscriptionManager.DEFAULT_PHONE_INDEX
+
+        // 1. Default-subscription listeners follow TelephonyRegistry.mDefaultPhoneId
+        if (isDefaultSub) {
+            val defaultPhoneId = (getFieldValue(registry, "mDefaultPhoneId") as? Int) ?: -1
+            if (defaultPhoneId >= 0 && defaultPhoneId != Int.MAX_VALUE) return defaultPhoneId
+            return if (rawPhoneId >= 0 && !isDefaultPhone) rawPhoneId else -1
+        }
+
+        // 2. Concrete slot index on Record
+        if (rawPhoneId >= 0 && !isDefaultPhone) {
+            return rawPhoneId
+        }
+
+        // 3. Explicit DEFAULT_PHONE_INDEX -> mDefaultPhoneId
+        if (isDefaultPhone) {
+            val defaultPhoneId = (getFieldValue(registry, "mDefaultPhoneId") as? Int) ?: -1
+            return if (defaultPhoneId >= 0 && defaultPhoneId != Int.MAX_VALUE) defaultPhoneId else -1
+        }
+
+        // 4. Concrete subscription ID -> resolve strictly via SubscriptionManager.getPhoneId(subId).
+        //    Never fall back to mDefaultPhoneId if an explicit subId fails resolution!
+        if (subId >= 0) {
+            try {
+                val m = findMethodByName(SubscriptionManager::class.java, "getPhoneId", 1)
+                if (m != null && m.parameterTypes[0] == Int::class.javaPrimitiveType) {
+                    val resolved = (m.invoke(null, subId) as? Int) ?: -1
+                    if (resolved >= 0 && resolved != Int.MAX_VALUE) return resolved
+                }
+            } catch (_: Throwable) {
+            }
+        }
+
+        return -1
+    }
+
+    /**
+     * Reads an atomic defensive copy of the real ServiceState strictly for THIS Record's own phoneId slot.
+     * Never falls back to another SIM slot or any global unsanitized cache.
+     */
+    private fun readSlotRealServiceState(registry: Any, record: Any): ServiceState? {
+        return try {
+            val phoneId = extractRecordPhoneId(registry, record)
+            if (phoneId < 0) return null
+            val recordsLock = getFieldValue(registry, "mRecords")
+            if (recordsLock != null) {
+                synchronized(recordsLock) {
+                    val arr = getFieldValue(registry, "mServiceState") as? Array<*>
+                    val raw = if (arr != null && phoneId in arr.indices) arr[phoneId] as? ServiceState else null
+                    raw?.let { ServiceState(it) }
+                }
+            } else {
+                val arr = getFieldValue(registry, "mServiceState") as? Array<*>
+                val raw = if (arr != null && phoneId in arr.indices) arr[phoneId] as? ServiceState else null
+                raw?.let { ServiceState(it) }
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun readLiveEventSetFlags(registry: Any, record: Any): Triple<Boolean, Boolean, Boolean>? {
+        return try {
+            val recordsLock = getFieldValue(registry, "mRecords")
+            if (recordsLock != null) {
+                synchronized(recordsLock) {
+                    val s = getFieldValue(record, "eventList") as? Set<*> ?: return null
+                    Triple(
+                        s.contains(EVENT_SERVICE_STATE_CHANGED),
+                        s.contains(EVENT_CELL_INFO_CHANGED),
+                        s.contains(EVENT_CELL_LOCATION_CHANGED)
+                    )
+                }
+            } else {
+                val s = getFieldValue(record, "eventList") as? Set<*> ?: return null
+                Triple(
+                    s.contains(EVENT_SERVICE_STATE_CHANGED),
+                    s.contains(EVENT_CELL_INFO_CHANGED),
+                    s.contains(EVENT_CELL_LOCATION_CHANGED)
+                )
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun extractAcceptedEvents(
+        registry: Any,
+        record: Any,
+        fallbackEventsArr: IntArray?,
+        fallbackLegacyMask: Int?
+    ): Triple<Boolean, Boolean, Boolean> {
+        readLiveEventSetFlags(registry, record)?.let { return it }
+        if (fallbackEventsArr != null) {
+            return Triple(
+                fallbackEventsArr.contains(EVENT_SERVICE_STATE_CHANGED),
+                fallbackEventsArr.contains(EVENT_CELL_INFO_CHANGED),
+                fallbackEventsArr.contains(EVENT_CELL_LOCATION_CHANGED)
+            )
+        }
+        if (fallbackLegacyMask != null) {
+            return Triple(
+                (fallbackLegacyMask and LISTEN_SERVICE_STATE) != 0,
+                (fallbackLegacyMask and LISTEN_CELL_INFO) != 0,
+                (fallbackLegacyMask and LISTEN_CELL_LOCATION) != 0
+            )
+        }
+        return Triple(false, false, false)
     }
 
     private fun syncRegistryRecords(registry: Any?) {
@@ -754,14 +1176,23 @@ object TelephonyHook {
                         if (inOurTelPump.get() == true) return
                         try {
                             val proxy = param.thisObject ?: return
-                            val uid = lookupCallbackUid(proxy)
-                            val tracked = recordTrackedCallback(proxy, uid)
-                            tracked?.wantsCellInfo = true
+                            val binder = (proxy as? IInterface)?.asBinder() ?: return
+                            val tracked = synchronized(trackedCallbacks) { trackedCallbacks[binder] }
+                            val hintUid = tracked?.uid ?: lookupCallbackUid(proxy)
+                            if (hintUid > 0 && cellModeForUid(hintUid) != CellMode.SPOOF) return
+                            val regAndRec = resolveLiveRegistryAndRecord(binder, tracked) ?: return
+                            val uid = extractRecordUid(regAndRec.second).takeIf { it > 0 } ?: hintUid
                             if (cellModeForUid(uid) != CellMode.SPOOF) return
+                            val (hasFine, _) = isRecordLocationPermitted(regAndRec.first, regAndRec.second)
+                            if (!hasFine) return
                             val pair = ShmReader.readCellsWithHeader() ?: return
                             if (pair.second.isEmpty()) return
                             param.args[0] = VirtualCellBuilder.buildCellInfoList(pair.first, pair.second)
-                            tracked?.lastPushedCellEpoch = pair.first.rfEpoch
+                            if (tracked != null) {
+                                tracked.lastPushedCellEpoch = pair.first.rfEpoch
+                            } else if (inListenCall.get() == true) {
+                                getOrCreateReplayState(binder).pushedCellEpoch = pair.first.rfEpoch
+                            }
                         } catch (t: Throwable) {
                             logOnce("proxy_cell_info", "onCellInfoChanged spoof error: $t")
                         }
@@ -773,10 +1204,15 @@ object TelephonyHook {
                         if (inOurTelPump.get() == true) return
                         try {
                             val proxy = param.thisObject ?: return
-                            val uid = lookupCallbackUid(proxy)
-                            val tracked = recordTrackedCallback(proxy, uid)
-                            tracked?.wantsCellLocation = true
+                            val binder = (proxy as? IInterface)?.asBinder() ?: return
+                            val tracked = synchronized(trackedCallbacks) { trackedCallbacks[binder] }
+                            val hintUid = tracked?.uid ?: lookupCallbackUid(proxy)
+                            if (hintUid > 0 && cellModeForUid(hintUid) != CellMode.SPOOF) return
+                            val regAndRec = resolveLiveRegistryAndRecord(binder, tracked) ?: return
+                            val uid = extractRecordUid(regAndRec.second).takeIf { it > 0 } ?: hintUid
                             if (cellModeForUid(uid) != CellMode.SPOOF) return
+                            val (hasFine, _) = isRecordLocationPermitted(regAndRec.first, regAndRec.second)
+                            if (!hasFine) return
                             val pair = ShmReader.readCellsWithHeader() ?: return
                             if (pair.second.isEmpty()) return
                             val paramType = (param.method as? Method)?.parameterTypes?.firstOrNull()
@@ -800,19 +1236,39 @@ object TelephonyHook {
                         try {
                             val orig = param.args.firstOrNull() as? ServiceState ?: return
                             val proxy = param.thisObject ?: return
-                            val uid = lookupCallbackUid(proxy)
-                            val origCopy = ServiceState(orig)
-                            latestRealServiceState = origCopy
-                            val tracked = recordTrackedCallback(proxy, uid)
-                            if (tracked != null) {
-                                tracked.wantsServiceState = true
-                                tracked.lastOrigServiceState = origCopy
+                            val binder = (proxy as? IInterface)?.asBinder() ?: return
+                            val tracked = synchronized(trackedCallbacks) { trackedCallbacks[binder] }
+                            val isInitialReplay = (tracked == null && inListenCall.get() == true)
+                            val hintUid = tracked?.uid ?: lookupCallbackUid(proxy)
+                            if (tracked == null && !isInitialReplay &&
+                                hintUid > 0 && cellModeForUid(hintUid) != CellMode.SPOOF
+                            ) {
+                                return
                             }
+                            val regAndRec = resolveLiveRegistryAndRecord(binder, tracked) ?: return
+                            val uid = extractRecordUid(regAndRec.second).takeIf { it > 0 } ?: hintUid
+
+                            // orig was already sanitized by TelephonyRegistry for THIS receiver — cache strictly per-callback!
+                            if (tracked != null) {
+                                tracked.lastOrigServiceState = ServiceState(orig)
+                            } else if (isInitialReplay && uid >= 10000) {
+                                getOrCreateReplayState(binder).sanitizedOrigSs = ServiceState(orig)
+                            }
+
                             if (cellModeForUid(uid) != CellMode.SPOOF) return
+
+                            val (hasFine, hasCoarse) = isRecordLocationPermitted(regAndRec.first, regAndRec.second)
                             val pair = ShmReader.readCellsWithHeader() ?: return
                             val serving = VirtualCellBuilder.buildServingCellIdentity(pair.first, pair.second)
-                            param.args[0] = VirtualCellBuilder.rewriteServiceState(orig, pair.first, serving)
-                            tracked?.lastPushedPlmnKey = plmnStateKey(pair.first, pair.second)
+                            val rewritten = VirtualCellBuilder.rewriteServiceState(orig, pair.first, serving)
+                            val sanitized = sanitizeServiceStateForReceiver(rewritten, hasFine, hasCoarse) ?: return
+                            param.args[0] = sanitized
+                            val key = plmnStateKey(pair.first, pair.second)
+                            if (tracked != null) {
+                                tracked.lastPushedPlmnKey = key
+                            } else if (isInitialReplay && uid >= 10000) {
+                                getOrCreateReplayState(binder).pushedPlmnKey = key
+                            }
                         } catch (t: Throwable) {
                             logOnce("proxy_ss", "onServiceStateChanged spoof error: $t")
                         }
@@ -826,27 +1282,24 @@ object TelephonyHook {
         }
     }
 
+    private fun resolveLiveRegistryAndRecord(binder: IBinder, tracked: TrackedTelCallback?): Pair<Any, Any>? {
+        val reg = tracked?.registryRef?.get()
+        if (reg != null) {
+            val rec = findLiveRecord(reg, binder)
+            if (rec != null) return Pair(reg, rec)
+        }
+        return findLiveRegistryAndRecord(binder)
+    }
+
+    private fun getOrCreateReplayState(binder: IBinder): InitialReplayState {
+        return synchronized(initialReplayCache) {
+            initialReplayCache[binder] ?: InitialReplayState().also { initialReplayCache[binder] = it }
+        }
+    }
+
     private fun lookupCallbackUid(proxyObj: Any?): Int {
         val binder = (proxyObj as? IInterface)?.asBinder() ?: return -1
         return callbackBinderToUid[binder] ?: -1
-    }
-
-    private fun recordTrackedCallback(proxyObj: Any, uid: Int): TrackedTelCallback? {
-        if (uid < 10000) return null
-        val binder = (proxyObj as? IInterface)?.asBinder() ?: return null
-        if (!binder.isBinderAlive) return null
-        return synchronized(trackedCallbacks) {
-            val existing = trackedCallbacks[binder]
-            if (existing != null) {
-                existing.proxy = proxyObj
-                existing.uid = uid
-                existing
-            } else {
-                TrackedTelCallback(binder = binder, proxy = proxyObj, uid = uid).also {
-                    trackedCallbacks[binder] = it
-                }
-            }
-        }
     }
 
     private fun plmnStateKey(header: ShmReader.RfHeader, cells: List<ShmReader.CellEntry>): String {
@@ -889,7 +1342,7 @@ object TelephonyHook {
         val plmnKey = if (pair != null) plmnStateKey(pair.first, pair.second) else null
 
         var cachedCells: List<Any>? = null
-        var cachedServingId: Any? = null
+        var cachedServingId: CellIdentity? = null
         var cachedGsmBundle: Bundle? = null
         val deadBinders = ArrayList<IBinder>()
 
@@ -898,28 +1351,74 @@ object TelephonyHook {
                 deadBinders.add(cb.binder)
                 continue
             }
+            val registry = cb.registryRef.get()
+            val liveRecord = if (registry != null) findLiveRecord(registry, cb.binder) else null
+            if (registry == null || liveRecord == null) {
+                deadBinders.add(cb.binder)
+                continue
+            }
+            cb.recordRef = WeakReference(liveRecord)
+            cb.subId = extractRecordSubId(liveRecord)
+            cb.phoneId = extractRecordPhoneId(registry, liveRecord)
+
+            readLiveEventSetFlags(registry, liveRecord)?.let { (wantsSs, wantsCellInfo, wantsCellLoc) ->
+                cb.wantsServiceState = wantsSs
+                cb.wantsCellInfo = wantsCellInfo
+                cb.wantsCellLocation = wantsCellLoc
+            }
+            if (!cb.wantsServiceState && !cb.wantsCellInfo && !cb.wantsCellLocation) {
+                deadBinders.add(cb.binder)
+                continue
+            }
+
             val mode = cellModeForUid(cb.uid)
             if (mode != CellMode.SPOOF || pair == null) {
-                // Simulation stopped or policy switched off: restore real ServiceState once if previously spoofed
+                // Simulation stopped or policy switched off: restore real ServiceState strictly for
+                // THIS Record's own phoneId slot and sanitized for its live permissions (or fully
+                // redacted under HIDE_CELL so real location never leaks)!
                 if (cb.lastPushedPlmnKey != null && cb.wantsServiceState) {
-                    val realSs = cb.lastOrigServiceState ?: latestRealServiceState
-                    if (realSs != null) {
-                        val ok = invokeProxyMethod(cb.proxy, "onServiceStateChanged", ServiceState(realSs))
+                    val (restoreFine, restoreCoarse) = if (mode == CellMode.HIDE) {
+                        Pair(false, false)
+                    } else {
+                        isRecordLocationPermitted(registry, liveRecord)
+                    }
+                    val slotReal = readSlotRealServiceState(registry, liveRecord)
+                    val restoredSs = if (slotReal != null) {
+                        sanitizeServiceStateForReceiver(slotReal, restoreFine, restoreCoarse)
+                    } else {
+                        cb.lastOrigServiceState?.let {
+                            sanitizeServiceStateForReceiver(it, restoreFine, restoreCoarse)
+                        }
+                    }
+                    if (restoredSs != null) {
+                        val ok = invokeProxyMethod(cb.proxy, "onServiceStateChanged", restoredSs)
                         if (!ok) deadBinders.add(cb.binder)
                     }
-                    cb.lastPushedPlmnKey = null
-                    cb.lastPushedCellEpoch = -1
                 }
+                cb.lastPushedPlmnKey = null
+                cb.lastPushedCellEpoch = -1
                 continue
             }
 
             val header = pair.first
             val cells = pair.second
             val plmnChanged = plmnKey != null && plmnKey != cb.lastPushedPlmnKey
+            val needsCellInfoPush = cb.wantsCellInfo && cells.isNotEmpty() &&
+                (plmnChanged || header.rfEpoch != cb.lastPushedCellEpoch)
+            val needsSsPush = plmnChanged && cb.wantsServiceState
+            val needsCellLocPush = plmnChanged && cb.wantsCellLocation && cells.isNotEmpty()
+            if (!needsSsPush && !needsCellLocPush && !needsCellInfoPush) {
+                if (plmnChanged) {
+                    cb.lastPushedPlmnKey = plmnKey
+                }
+                continue
+            }
+
+            val (hasFine, hasCoarse) = isRecordLocationPermitted(registry, liveRecord)
             var pendingServiceState = false
 
-            if (plmnChanged && cb.wantsServiceState) {
-                val baseSs = cb.lastOrigServiceState ?: latestRealServiceState
+            if (needsSsPush) {
+                val baseSs = readSlotRealServiceState(registry, liveRecord) ?: cb.lastOrigServiceState
                 if (baseSs != null) {
                     if (cachedServingId == null && cells.isNotEmpty()) {
                         cachedServingId = VirtualCellBuilder.buildServingCellIdentity(header, cells)
@@ -927,18 +1426,21 @@ object TelephonyHook {
                     val rewritten = VirtualCellBuilder.rewriteServiceState(
                         baseSs,
                         header,
-                        cachedServingId as? android.telephony.CellIdentity
+                        cachedServingId
                     )
-                    if (!invokeProxyMethod(cb.proxy, "onServiceStateChanged", rewritten)) {
-                        deadBinders.add(cb.binder)
-                        continue
+                    val sanitized = sanitizeServiceStateForReceiver(rewritten, hasFine, hasCoarse)
+                    if (sanitized != null) {
+                        if (!invokeProxyMethod(cb.proxy, "onServiceStateChanged", sanitized)) {
+                            deadBinders.add(cb.binder)
+                            continue
+                        }
                     }
                 } else {
                     pendingServiceState = true
                 }
             }
 
-            if (plmnChanged && cb.wantsCellLocation && cells.isNotEmpty()) {
+            if (needsCellLocPush && hasFine) {
                 val locMethod = findMethodByName(cb.proxy.javaClass, "onCellLocationChanged", 1)
                 if (locMethod != null) {
                     val pType = locMethod.parameterTypes.firstOrNull()
@@ -964,9 +1466,7 @@ object TelephonyHook {
                 cb.lastPushedPlmnKey = plmnKey
             }
 
-            if (cb.wantsCellInfo && cells.isNotEmpty() &&
-                (plmnChanged || header.rfEpoch != cb.lastPushedCellEpoch)
-            ) {
+            if (needsCellInfoPush && hasFine) {
                 if (cachedCells == null) {
                     cachedCells = VirtualCellBuilder.buildCellInfoList(header, cells)
                 }
@@ -981,14 +1481,12 @@ object TelephonyHook {
         }
 
         if (deadBinders.isNotEmpty()) {
-            synchronized(trackedCallbacks) {
-                for (b in deadBinders) {
-                    trackedCallbacks.remove(b)
-                }
+            for (b in deadBinders) {
+                evictCallbackBinder(b)
             }
         }
 
-        // Notify IOnSubscriptionsChangedListener callbacks when SIM spoof state or region changes
+        // Notify accepted IOnSubscriptionsChangedListener callbacks when SIM spoof state or region changes
         if (subSnapshotList.isNotEmpty()) {
             val deadSubBinders = ArrayList<IBinder>()
             for (scb in subSnapshotList) {
@@ -996,6 +1494,14 @@ object TelephonyHook {
                     deadSubBinders.add(scb.binder)
                     continue
                 }
+                val registry = scb.registryRef.get()
+                val liveRecord = if (registry != null) findLiveRecord(registry, scb.binder) else null
+                if (registry == null || liveRecord == null) {
+                    deadSubBinders.add(scb.binder)
+                    continue
+                }
+                scb.recordRef = WeakReference(liveRecord)
+
                 val mode = cellModeForUid(scb.uid)
                 val hdr = pair?.first
                 val simKey = if (mode == CellMode.SPOOF &&
@@ -1084,6 +1590,7 @@ object TelephonyHook {
             XposedBridge.hookAllMethods(policyCls, "checkLocationPermission", object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     try {
+                        if (inPermProbe.get() == true) return
                         if (inCellNotify.get() != true) return
                         val query = param.args.getOrNull(1) ?: return
                         val uid = (getFieldValue(query, "callingUid") as? Int) ?: return
@@ -1110,6 +1617,7 @@ object TelephonyHook {
     private fun findMethodByName(cls: Class<*>, name: String, paramCount: Int): Method? {
         val key = "${cls.name}#$name/$paramCount"
         methodCache[key]?.let { return it }
+        if (missingMethods.contains(key)) return null
         var cur: Class<*>? = cls
         while (cur != null && cur != Any::class.java) {
             for (m in cur.declaredMethods) {
@@ -1121,6 +1629,7 @@ object TelephonyHook {
             }
             cur = cur.superclass
         }
+        missingMethods.add(key)
         return null
     }
 
@@ -1128,6 +1637,7 @@ object TelephonyHook {
         val key = "${obj.javaClass.name}.$fieldName"
         var f = fieldCache[key]
         if (f == null) {
+            if (missingFields.contains(key)) return null
             var cur: Class<*>? = obj.javaClass
             while (cur != null && cur != Any::class.java) {
                 try {
@@ -1140,9 +1650,13 @@ object TelephonyHook {
                     cur = cur.superclass
                 }
             }
+            if (f == null) {
+                missingFields.add(key)
+                return null
+            }
         }
         return try {
-            f?.get(obj)
+            f.get(obj)
         } catch (_: Throwable) {
             null
         }
