@@ -15,6 +15,25 @@ constexpr double kRadToDeg = 180.0 / kPi;
 constexpr double kEarthRadiusM = 6378137.0;
 constexpr float  kGravity = 9.80665f;
 
+bool is_valid_wgs84(double lat, double lon, double alt) {
+    return std::isfinite(lat) && std::isfinite(lon) && std::isfinite(alt) &&
+           lat >= -90.0 && lat <= 90.0 &&
+           lon >= -180.0 && lon <= 180.0;
+}
+
+double unwrap_lon_near(double lon, double ref) {
+    return ref + std::remainder(lon - ref, 360.0);
+}
+
+double normalize_lon(double lon) {
+    if (!std::isfinite(lon)) return 0.0;
+    if (lon >= -180.0 && lon <= 180.0) return lon;
+    double r = std::remainder(lon, 360.0);
+    if (r < -180.0) r += 360.0;
+    if (r > 180.0) r -= 360.0;
+    return r;
+}
+
 double haversine_m(double lat1, double lon1, double lat2, double lon2) {
     double dlat = (lat2 - lat1) * kDegToRad;
     double dlon = (lon2 - lon1) * kDegToRad;
@@ -138,7 +157,8 @@ void SimEngine::set_moving(bool moving) {
     }
 }
 
-void SimEngine::set_point(double lat, double lon, double alt) {
+bool SimEngine::set_point(double lat, double lon, double alt) {
+    if (!is_valid_wgs84(lat, lon, alt)) return false;
     std::lock_guard<std::mutex> lk(mu_);
     samples_.clear();
     route_length_m_ = 0.0;
@@ -153,12 +173,30 @@ void SimEngine::set_point(double lat, double lon, double alt) {
     current_speed_mps_ = 0.0f;
     route_epoch_++;
     rf_dirty_ = true;
+    return true;
 }
 
-void SimEngine::set_route(const std::vector<Waypoint>& pts, bool loop, float max_distance_m, uint32_t max_laps) {
+SetRouteResult SimEngine::set_route(const std::vector<Waypoint>& pts, bool loop, float max_distance_m, uint32_t max_laps) {
+    if (pts.empty()) return SetRouteResult::EmptyRoute;
+    for (const auto& w : pts) {
+        if (!is_valid_wgs84(w.lat, w.lon, w.alt)) {
+            return SetRouteResult::InvalidCoords;
+        }
+    }
+
+    // Build smooth Catmull-Rom samples locally BEFORE mutating any engine state
+    std::vector<SamplePt> built_samples;
+    double built_len = 0.0;
+    if (pts.size() >= 2) {
+        build_smooth_route_samples(pts, loop, &built_samples, &built_len);
+        if (!std::isfinite(built_len) || built_len <= 1e-3 || built_samples.size() < 2) {
+            return SetRouteResult::ZeroLengthRoute;
+        }
+    }
+
     std::lock_guard<std::mutex> lk(mu_);
     loop_ = loop;
-    max_distance_m_ = std::max(0.0f, max_distance_m);
+    max_distance_m_ = std::isfinite(max_distance_m) ? std::max(0.0f, max_distance_m) : 0.0f;
     max_laps_ = max_laps;
     dist_on_route_m_ = 0.0;
     total_distance_m_ = 0.0;
@@ -166,35 +204,34 @@ void SimEngine::set_route(const std::vector<Waypoint>& pts, bool loop, float max
     route_epoch_++;
     rf_dirty_ = true;
 
-    if (pts.empty()) {
-        samples_.clear();
-        route_length_m_ = 0.0;
-        moving_ = false;
-        return;
-    }
     if (pts.size() == 1) {
         samples_.clear();
         route_length_m_ = 0.0;
         cur_lat_ = disp_lat_ = pts[0].lat;
         cur_lon_ = disp_lon_ = pts[0].lon;
         cur_alt_ = disp_alt_ = pts[0].alt;
-        return;
+        return SetRouteResult::Ok;
     }
 
-    rebuild_smooth_route_locked(pts, loop);
+    samples_ = std::move(built_samples);
+    route_length_m_ = built_len;
     float dummy_cf = 1.0f;
     sample_route_at_locked(0.0, &cur_lat_, &cur_lon_, &cur_alt_, &cur_bearing_deg_, &dummy_cf);
     disp_lat_ = cur_lat_;
     disp_lon_ = cur_lon_;
     disp_alt_ = cur_alt_;
+    return SetRouteResult::Ok;
 }
 
-void SimEngine::rebuild_smooth_route_locked(const std::vector<Waypoint>& pts, bool loop) {
-    samples_.clear();
+void SimEngine::build_smooth_route_samples(const std::vector<Waypoint>& pts, bool loop,
+                                           std::vector<SamplePt>* out_samples,
+                                           double* out_length_m) const {
+    out_samples->clear();
+    *out_length_m = 0.0;
     const size_t n = pts.size();
     const size_t segs = loop ? n : (n - 1);
 
-    // Build smooth Catmull-Rom samples (~every 3 meters along each segment)
+    // Build smooth Catmull-Rom samples (~every 3 meters along each segment) with antimeridian unwrap
     std::vector<Waypoint> dense;
     dense.reserve(segs * 12);
 
@@ -212,13 +249,16 @@ void SimEngine::rebuild_smooth_route_locked(const std::vector<Waypoint>& pts, bo
         Waypoint p1 = get_pt(static_cast<int>(i));
         Waypoint p2 = get_pt(static_cast<int>(i) + 1);
         Waypoint p3 = get_pt(static_cast<int>(i) + 2);
+        double lon0 = unwrap_lon_near(p0.lon, p1.lon);
+        double lon2 = unwrap_lon_near(p2.lon, p1.lon);
+        double lon3 = unwrap_lon_near(p3.lon, lon2);
         double seg_len = haversine_m(p1.lat, p1.lon, p2.lat, p2.lon);
         int sub = std::clamp(static_cast<int>(std::ceil(seg_len / 3.0)), 4, 40);
         for (int k = 0; k < sub; ++k) {
             double t = static_cast<double>(k) / static_cast<double>(sub);
             Waypoint w;
-            w.lat = catmull_rom(p0.lat, p1.lat, p2.lat, p3.lat, t);
-            w.lon = catmull_rom(p0.lon, p1.lon, p2.lon, p3.lon, t);
+            w.lat = std::clamp(catmull_rom(p0.lat, p1.lat, p2.lat, p3.lat, t), -90.0, 90.0);
+            w.lon = normalize_lon(catmull_rom(lon0, p1.lon, lon2, lon3, t));
             w.alt = catmull_rom(p0.alt, p1.alt, p2.alt, p3.alt, t);
             dense.push_back(w);
         }
@@ -229,26 +269,28 @@ void SimEngine::rebuild_smooth_route_locked(const std::vector<Waypoint>& pts, bo
         dense.push_back(pts.back());
     }
 
-    samples_.reserve(dense.size());
+    out_samples->reserve(dense.size());
     double cum = 0.0;
     for (size_t i = 0; i < dense.size(); ++i) {
         if (i > 0) {
             cum += haversine_m(dense[i - 1].lat, dense[i - 1].lon, dense[i].lat, dense[i].lon);
         }
         SamplePt sp{dense[i].lat, dense[i].lon, dense[i].alt, cum, 1.0f};
-        samples_.push_back(sp);
+        out_samples->push_back(sp);
     }
-    route_length_m_ = cum;
+    *out_length_m = cum;
 
     // Estimate corner slowdown factor from local heading change
-    for (size_t i = 1; i + 1 < samples_.size(); ++i) {
-        float b1 = initial_bearing_deg(samples_[i - 1].lat, samples_[i - 1].lon, samples_[i].lat, samples_[i].lon);
-        float b2 = initial_bearing_deg(samples_[i].lat, samples_[i].lon, samples_[i + 1].lat, samples_[i + 1].lon);
+    for (size_t i = 1; i + 1 < out_samples->size(); ++i) {
+        float b1 = initial_bearing_deg((*out_samples)[i - 1].lat, (*out_samples)[i - 1].lon,
+                                       (*out_samples)[i].lat, (*out_samples)[i].lon);
+        float b2 = initial_bearing_deg((*out_samples)[i].lat, (*out_samples)[i].lon,
+                                       (*out_samples)[i + 1].lat, (*out_samples)[i + 1].lon);
         float diff = std::fabs(b2 - b1);
         if (diff > 180.0f) diff = 360.0f - diff;
         // 15 deg per 3m sample -> mild turn; 45 deg -> tight corner (slow down to ~0.72)
         float cf = 1.0f - std::clamp(diff / 120.0f, 0.0f, 0.30f);
-        samples_[i].corner_factor = cf;
+        (*out_samples)[i].corner_factor = cf;
     }
 }
 
@@ -271,8 +313,9 @@ void SimEngine::sample_route_at_locked(double s_m, double* lat, double* lon, dou
     const SamplePt& b = samples_[idx];
     double seg = std::max(1e-6, b.cum_dist_m - a.cum_dist_m);
     double frac = std::clamp((s - a.cum_dist_m) / seg, 0.0, 1.0);
-    *lat = a.lat + (b.lat - a.lat) * frac;
-    *lon = a.lon + (b.lon - a.lon) * frac;
+    double b_lon = unwrap_lon_near(b.lon, a.lon);
+    *lat = std::clamp(a.lat + (b.lat - a.lat) * frac, -90.0, 90.0);
+    *lon = normalize_lon(a.lon + (b_lon - a.lon) * frac);
     *alt = a.alt + (b.alt - a.alt) * frac;
     *bearing_deg = initial_bearing_deg(a.lat, a.lon, b.lat, b.lon);
     *corner_factor = a.corner_factor + (b.corner_factor - a.corner_factor) * static_cast<float>(frac);
@@ -584,8 +627,8 @@ void SimEngine::step(double dt_sec, uint64_t boot_ns, uint64_t utc_ms, KurokoShm
     double d_east_m  = ou_east_m_  + hf_e;
     double cos_lat = std::max(0.05, std::cos(cur_lat_ * kDegToRad));
 
-    disp_lat_ = cur_lat_ + (d_north_m / kEarthRadiusM) * kRadToDeg;
-    disp_lon_ = cur_lon_ + (d_east_m  / (kEarthRadiusM * cos_lat)) * kRadToDeg;
+    disp_lat_ = std::clamp(cur_lat_ + (d_north_m / kEarthRadiusM) * kRadToDeg, -90.0, 90.0);
+    disp_lon_ = normalize_lon(cur_lon_ + (d_east_m  / (kEarthRadiusM * cos_lat)) * kRadToDeg);
     disp_alt_ = cur_alt_ + ou_up_m_;
 
     // Correlated horizontal accuracy breathing (3.5..10.5m)

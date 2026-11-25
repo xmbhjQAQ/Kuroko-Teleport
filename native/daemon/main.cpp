@@ -828,13 +828,11 @@ void read_gms_status(bool* out_gms_shm_ok, bool* out_gms_enabled, std::string* o
     if (out_gms_shm_ok) *out_gms_shm_ok = false;
     if (out_gms_diag) out_gms_diag->clear();
 
-    if (!enabled) {
-        if (out_gms_diag) *out_gms_diag = "disabled";
+    FILE* fp = std::fopen(KUROKO_GMS_STATUS_PATH, "r");
+    if (!fp) {
+        if (!enabled && out_gms_diag) *out_gms_diag = "disabled";
         return;
     }
-
-    FILE* fp = std::fopen(KUROKO_GMS_STATUS_PATH, "r");
-    if (!fp) return;
 
     int32_t pid = 0;
     uint32_t reported_uid = 0;
@@ -861,49 +859,50 @@ void read_gms_status(bool* out_gms_shm_ok, bool* out_gms_enabled, std::string* o
     }
     std::fclose(fp);
 
-    if (pid <= 0 || kill(static_cast<pid_t>(pid), 0) != 0) {
+    bool proc_verified = false;
+    if (pid > 0 && kill(static_cast<pid_t>(pid), 0) == 0) {
+        int gms_app_id = resolve_installed_gms_app_id();
+        char proc_dir[64];
+        std::snprintf(proc_dir, sizeof(proc_dir), "/proc/%d", pid);
+        struct stat pst{};
+        if (gms_app_id >= 10000 &&
+            stat(proc_dir, &pst) == 0 &&
+            (pst.st_uid % 100000u) == static_cast<uint32_t>(gms_app_id) &&
+            (reported_uid == 0 || reported_uid == static_cast<uint32_t>(pst.st_uid))) {
+            char cmdline_path[64];
+            std::snprintf(cmdline_path, sizeof(cmdline_path), "/proc/%d/cmdline", pid);
+            int cfd = open(cmdline_path, O_RDONLY | O_CLOEXEC);
+            if (cfd >= 0) {
+                char cmdline[128]{};
+                ssize_t n = read(cfd, cmdline, sizeof(cmdline) - 1);
+                close(cfd);
+                if (n > 0) {
+                    cmdline[n] = '\0';
+                    // Exact match against GMS location process(es); never accept recycled PIDs (e.g. .unstable)
+                    if (std::strcmp(cmdline, "com.google.android.gms") == 0 ||
+                        std::strcmp(cmdline, "com.google.android.gms.persistent") == 0) {
+                        proc_verified = true;
+                    }
+                }
+            }
+        }
+    }
+
+    const bool status_ok = (status.rfind("ok:", 0) == 0);
+
+    if (!enabled) {
+        if (out_gms_diag) {
+            *out_gms_diag = (proc_verified && status_ok) ? "disabled_pending_restart" : "disabled";
+        }
+        return;
+    }
+
+    if (!proc_verified) {
         if (out_gms_diag) *out_gms_diag = "stale_pid";
         return;
     }
 
-    // Verify /proc/<pid> owner UID matches installed com.google.android.gms appId
-    int gms_app_id = resolve_installed_gms_app_id();
-    char proc_dir[64];
-    std::snprintf(proc_dir, sizeof(proc_dir), "/proc/%d", pid);
-    struct stat pst{};
-    if (gms_app_id < 10000 ||
-        stat(proc_dir, &pst) != 0 ||
-        (pst.st_uid % 100000u) != static_cast<uint32_t>(gms_app_id) ||
-        (reported_uid != 0 && reported_uid != static_cast<uint32_t>(pst.st_uid))) {
-        if (out_gms_diag) *out_gms_diag = "stale_pid";
-        return;
-    }
-
-    char cmdline_path[64];
-    std::snprintf(cmdline_path, sizeof(cmdline_path), "/proc/%d/cmdline", pid);
-    int cfd = open(cmdline_path, O_RDONLY | O_CLOEXEC);
-    if (cfd < 0) {
-        if (out_gms_diag) *out_gms_diag = "stale_pid";
-        return;
-    }
-    char cmdline[128]{};
-    ssize_t n = read(cfd, cmdline, sizeof(cmdline) - 1);
-    close(cfd);
-    if (n <= 0) {
-        if (out_gms_diag) *out_gms_diag = "stale_pid";
-        return;
-    }
-    cmdline[n] = '\0';
-
-    // Exact match against GMS location process(es); never accept recycled PIDs (e.g. .unstable)
-    bool is_gms_proc = (std::strcmp(cmdline, "com.google.android.gms") == 0 ||
-                        std::strcmp(cmdline, "com.google.android.gms.persistent") == 0);
-    if (!is_gms_proc) {
-        if (out_gms_diag) *out_gms_diag = "stale_pid";
-        return;
-    }
-
-    if (status.rfind("ok:", 0) != 0) {
+    if (!status_ok) {
         if (out_gms_diag) *out_gms_diag = status;
         return;
     }
@@ -946,6 +945,7 @@ std::string format_status_json() {
         "\"mode\":%u,\"carry\":%u,\"jitter\":%.2f,\"pace_var\":%.3f,\"targets\":%u,"
         "\"loc_shm\":%d,\"phone_shm\":%d,\"sensor_shm\":%d,\"bt_shm\":%d,\"sensor_diag\":\"%s\","
         "\"gms_shm\":%s,\"gms_enabled\":%s,\"gms_diag\":\"%s\","
+        "\"daemon_pid\":%d,"
         "\"mod_ver\":\"%s\",\"mod_code\":%d,\"proto_ver\":%d,\"shm_ver\":%d,"
         "\"min_app_code\":%d,\"xposed_code\":%d,\"zygisk_code\":%d,"
         "\"rf_country\":\"%s\",\"rf_mcc\":%u,\"rf_mnc\":%u,"
@@ -964,6 +964,7 @@ std::string format_status_json() {
         gms_shm_ok ? "true" : "false",
         gms_enabled ? "true" : "false",
         gms_diag_esc.c_str(),
+        static_cast<int>(getpid()),
         KUROKO_MODULE_VERSION_NAME,
         KUROKO_MODULE_VERSION_CODE,
         KUROKO_IPC_PROTOCOL_VERSION,
@@ -1181,10 +1182,17 @@ std::string handle_command(const std::string& line) {
         g_engine.reset_route();
         return "OK RESET_ROUTE\n";
     } else if (cmd == "SET_POINT") {
-        double lat = 0, lon = 0, alt = 45.0;
-        if (!(iss >> lat >> lon)) return "ERR BAD_ARGS\n";
-        iss >> alt;
-        g_engine.set_point(lat, lon, alt);
+        std::string lat_s, lon_s, alt_s, extra;
+        if (!(iss >> lat_s >> lon_s)) return "ERR BAD_ARGS\n";
+        double lat = 0.0, lon = 0.0, alt = 45.0;
+        if (!parse_double_strict(lat_s, &lat) || !parse_double_strict(lon_s, &lon)) {
+            return "ERR INVALID_COORDS\n";
+        }
+        if (iss >> alt_s) {
+            if (!parse_double_strict(alt_s, &alt)) return "ERR INVALID_COORDS\n";
+            if (iss >> extra) return "ERR INVALID_COORDS\n";
+        }
+        if (!g_engine.set_point(lat, lon, alt)) return "ERR INVALID_COORDS\n";
         return "OK SET_POINT\n";
     } else if (cmd == "SET_SPEED") {
         float sp = 0.0f;
@@ -1267,11 +1275,12 @@ std::string handle_command(const std::string& line) {
     } else if (cmd == "SET_ROUTE") {
         int loop_i = 1;
         float max_dist = 0.0f;
-        std::string tok3, tok4;
+        std::string tok3, tok4, extra;
         if (!(iss >> loop_i >> max_dist >> tok3)) return "ERR BAD_ARGS\n";
         uint32_t max_laps = (loop_i != 0) ? 0u : 1u;
         std::string pts_str;
         if (iss >> tok4) {
+            if (iss >> extra) return "ERR BAD_ARGS\n";
             char* endp = nullptr;
             unsigned long parsed_laps = std::strtoul(tok3.c_str(), &endp, 10);
             if (!endp || *endp != '\0' || tok3.empty() || tok3[0] == '-') return "ERR BAD_ARGS\n";
@@ -1280,20 +1289,34 @@ std::string handle_command(const std::string& line) {
         } else {
             pts_str = tok3;
         }
+        auto raw_pts = split_fields(pts_str, ';');
         std::vector<kuroko::Waypoint> pts;
-        std::stringstream ss(pts_str);
-        std::string tok;
-        while (std::getline(ss, tok, ';')) {
+        pts.reserve(raw_pts.size());
+        for (const auto& tok : raw_pts) {
             if (tok.empty()) continue;
+            auto f = split_fields(tok, ',');
+            if (f.size() != 2 && f.size() != 3) return "ERR INVALID_COORDS\n";
             double lat = 0.0, lon = 0.0, alt = 45.0;
-            int n = std::sscanf(tok.c_str(), "%lf,%lf,%lf", &lat, &lon, &alt);
-            if (n >= 2) {
-                pts.push_back(kuroko::Waypoint{lat, lon, alt});
+            if (!parse_double_strict(f[0], &lat) || !parse_double_strict(f[1], &lon)) {
+                return "ERR INVALID_COORDS\n";
             }
+            if (f.size() == 3 && !parse_double_strict(f[2], &alt)) {
+                return "ERR INVALID_COORDS\n";
+            }
+            pts.push_back(kuroko::Waypoint{lat, lon, alt});
         }
         if (pts.empty()) return "ERR EMPTY_ROUTE\n";
-        g_engine.set_route(pts, loop_i != 0, max_dist, max_laps);
-        return "OK SET_ROUTE " + std::to_string(pts.size()) + "\n";
+        switch (g_engine.set_route(pts, loop_i != 0, max_dist, max_laps)) {
+            case kuroko::SetRouteResult::Ok:
+                return "OK SET_ROUTE " + std::to_string(pts.size()) + "\n";
+            case kuroko::SetRouteResult::EmptyRoute:
+                return "ERR EMPTY_ROUTE\n";
+            case kuroko::SetRouteResult::InvalidCoords:
+                return "ERR INVALID_COORDS\n";
+            case kuroko::SetRouteResult::ZeroLengthRoute:
+                return "ERR ZERO_LENGTH_ROUTE\n";
+        }
+        return "ERR INVALID_COORDS\n";
     } else if (cmd == "SET_RF_CONFIG") {
         std::string flags_str, mcc_str, mnc_str, digits_str, iso_str, alpha_b64;
         if (!(iss >> flags_str >> mcc_str >> mnc_str >> digits_str >> iso_str)) {
@@ -1490,7 +1513,8 @@ std::string handle_command(const std::string& line) {
                 unlink(tmp_path);
                 return "ERR IO_FAILED\n";
             }
-            unlink(KUROKO_GMS_STATUS_PATH);
+            // Keep KUROKO_GMS_STATUS_PATH so read_gms_status() can accurately report
+            // "disabled_pending_restart" while the previously hooked GMS PID is still alive.
             LOGI("GMS FLP disabled via SET_GMS 0");
             write_daemon_log(false, "gms_flp set=disabled");
             return "OK GMS_DISABLED\n";

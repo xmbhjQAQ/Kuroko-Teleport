@@ -15,6 +15,13 @@ struct Waypoint {
     double alt;
 };
 
+enum class SetRouteResult {
+    Ok,
+    EmptyRoute,
+    InvalidCoords,
+    ZeroLengthRoute,
+};
+
 struct SimStatus {
     bool active;
     bool moving;
@@ -54,8 +61,8 @@ public:
 
     void set_active(bool active);
     void set_moving(bool moving);
-    void set_point(double lat, double lon, double alt);
-    void set_route(const std::vector<Waypoint>& pts, bool loop, float max_distance_m, uint32_t max_laps = 0);
+    bool set_point(double lat, double lon, double alt);
+    SetRouteResult set_route(const std::vector<Waypoint>& pts, bool loop, float max_distance_m, uint32_t max_laps = 0);
     void set_speed(float speed_mps);
     void set_motion_mode(uint32_t mode);
     void set_carry_mode(uint32_t mode);
@@ -146,7 +153,8 @@ private:
 
     uint64_t rng_state_ = 0x9E3779B97F4A7C15ULL;
     float rand_normal();
-    void rebuild_smooth_route_locked(const std::vector<Waypoint>& pts, bool loop);
+    void build_smooth_route_samples(const std::vector<Waypoint>& pts, bool loop,
+                                    std::vector<SamplePt>* out_samples, double* out_length_m) const;
     void sample_route_at_locked(double s_m, double* lat, double* lon, double* alt,
                                 float* bearing_deg, float* corner_factor) const;
     void update_biomechanics_locked(double dt_sec, uint64_t boot_ns, float eff_speed);
