@@ -136,6 +136,9 @@ data class SimStatus(
     val phoneShm: Boolean = false,
     val sensorShm: Boolean = false,
     val btShm: Boolean = false,
+    val gmsShm: Boolean = false,
+    val gmsEnabled: Boolean = true,
+    val gmsDiag: String = "",
     val sensorDiag: String = "",
     val modVer: String = "",
     val modCode: Int = 0,
@@ -418,6 +421,16 @@ class DaemonClient {
 
     suspend fun ping(): Result<Boolean> = sendCommand("PING").map { it.startsWith("OK PONG") }
 
+    private fun optJsonFlag(j: JSONObject, key: String, default: Boolean): Boolean {
+        if (!j.has(key) || j.isNull(key)) return default
+        return when (val v = j.opt(key)) {
+            is Boolean -> v
+            is Number -> v.toInt() != 0
+            is String -> v.equals("true", ignoreCase = true) || v == "1"
+            else -> default
+        }
+    }
+
     suspend fun getStatus(): Result<SimStatus> = sendCommand("STATUS").mapCatching { raw ->
         val j = JSONObject(raw)
         SimStatus(
@@ -444,10 +457,13 @@ class DaemonClient {
             jitterSigmaM = j.optDouble("jitter", 2.0).toFloat(),
             paceVarRatio = j.optDouble("pace_var", 0.08).toFloat(),
             targetCount = j.optInt("targets", 0),
-            locShm = j.optInt("loc_shm", 0) != 0,
-            phoneShm = j.optInt("phone_shm", 0) != 0,
-            sensorShm = j.optInt("sensor_shm", 0) != 0,
-            btShm = j.optInt("bt_shm", 0) != 0,
+            locShm = optJsonFlag(j, "loc_shm", false),
+            phoneShm = optJsonFlag(j, "phone_shm", false),
+            sensorShm = optJsonFlag(j, "sensor_shm", false),
+            btShm = optJsonFlag(j, "bt_shm", false),
+            gmsShm = optJsonFlag(j, "gms_shm", false),
+            gmsEnabled = optJsonFlag(j, "gms_enabled", true),
+            gmsDiag = j.optString("gms_diag", ""),
             sensorDiag = j.optString("sensor_diag", ""),
             modVer = j.optString("mod_ver", ""),
             modCode = j.optInt("mod_code", 0),
@@ -548,6 +564,10 @@ class DaemonClient {
         }
         val normalized = if (trimmed.equals("auto", ignoreCase = true)) "auto" else trimmed
         return sendCommand("SET_LANG $normalized")
+    }
+
+    suspend fun setGmsEnabled(enabled: Boolean): Result<String> {
+        return sendCommand(if (enabled) "SET_GMS 1" else "SET_GMS 0")
     }
 
     suspend fun setRfConfig(config: RfConfig): Result<String> {

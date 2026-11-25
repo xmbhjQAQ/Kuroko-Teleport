@@ -252,6 +252,17 @@ object KurokoRuntime {
         rfConfigSynced = false
     }
 
+    suspend fun setGmsEnabled(enabled: Boolean): Boolean {
+        val res = daemon.setGmsEnabled(enabled)
+        if (res.isSuccess) {
+            AppLogBuffer.i("GMS", "SET_GMS ${if (enabled) 1 else 0} accepted (${res.getOrNull().orEmpty()})")
+        } else {
+            AppLogBuffer.w("GMS", "SET_GMS ${if (enabled) 1 else 0} failed: ${res.exceptionOrNull()?.message ?: "offline"}")
+        }
+        pollOnce()
+        return res.isSuccess
+    }
+
     suspend fun saveAndSyncRfConfig(context: Context, config: RfConfig): Result<Unit> {
         init(context)
         val store = RfConfigStore(context.applicationContext)
@@ -647,7 +658,7 @@ object KurokoRuntime {
             val compat = evaluateVersionCompat(true, st, locCtx)
             _versionCompat.value = compat
 
-            val hooksSig = "L=${st.locShm},P=${st.phoneShm},S=${st.sensorShm},B=${st.btShm}"
+            val hooksSig = "L=${st.locShm},P=${st.phoneShm},S=${st.sensorShm},B=${st.btShm},G=${st.gmsShm}"
             if (lastLoggedConnected != true) {
                 lastLoggedConnected = true
                 lastLoggedHooksSignature = hooksSig

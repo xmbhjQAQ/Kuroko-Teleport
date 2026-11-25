@@ -2853,6 +2853,20 @@ private fun KurokoControllerScreen() {
                     )
                 }
             },
+            onSetGmsEnabled = { enabled ->
+                scope.launch {
+                    val ok = KurokoRuntime.setGmsEnabled(enabled)
+                    if (ok) {
+                        showToast(
+                            context.getString(
+                                if (enabled) R.string.rf_gms_toggled_enabled else R.string.rf_gms_toggled_disabled
+                            )
+                        )
+                    } else {
+                        showToast(context.getString(R.string.daemon_unresponsive))
+                    }
+                }
+            },
             onNotify = { msg -> showToast(msg) }
         )
     }

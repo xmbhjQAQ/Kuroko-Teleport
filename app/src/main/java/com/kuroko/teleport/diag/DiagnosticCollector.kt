@@ -80,6 +80,9 @@ data class DiagnosticSnapshot(
     val apkInstalledProp: String,
     val daemonPids: String,
     val portListening: Boolean,
+    val gmsDisabledFile: Boolean,
+    val gmsStatusFile: String,
+    val gmsProcesses: List<String>,
     val lsposedSensorHook: String,
     val sensorServiceInstances: Int,
     val sensorServiceVmaCount: Int,
@@ -134,6 +137,12 @@ object DiagnosticCollector {
     private val AVC_ENGINE_SUBJECT_REGEX = Regex(
         """(?i)(?:kuroko|memfd|tmpfs|adb_data_file|sensorservice|binder|location|unix_stream_socket)"""
     )
+    private val AVC_GMS_SCONTEXT_REGEX = Regex(
+        """(?i)\bscontext=u:r:gmscore_app[a-z0-9_]*:"""
+    )
+    private val AVC_GMS_SUBJECT_REGEX = Regex(
+        """(?i)(?:kuroko|su_tmpfs|magisk_tmpfs|tmpfs|memfd|\btclass=fd\b|\bfd\b)"""
+    )
     private val AVC_DIRECT_TARGET_REGEX = Regex(
         """(?i)(?:\btcontext=[^\s]*(?:kuroko|memfd|adb_data_file|sensorservice)|\bname="[^"]*(?:kuroko|memfd|adb_data_file|sensorservice)[^"]*")"""
     )
@@ -186,6 +195,14 @@ echo "===DAEMON_PID==="
 pidof kuroko_daemon 2>/dev/null || true
 echo "===TCP_LISTEN==="
 grep -i ":705D " /proc/net/tcp /proc/net/tcp6 2>/dev/null || true
+echo "===GMS_STATUS==="
+[ -f /data/adb/kuroko/gms_disabled ] && echo "gms_disabled=1" || echo "gms_disabled=0"
+cat /data/adb/kuroko/gms_status 2>/dev/null || true
+echo "===GMS_PROCS==="
+ps -AZ 2>/dev/null | grep "com\.google\.android\.gms" | while read -r ctx rest; do
+  proc="${'$'}{rest##* }"
+  [ -n "${'$'}ctx" ] && [ -n "${'$'}proc" ] && echo "${'$'}ctx ${'$'}proc"
+done | head -n 8 || true
 echo "===SENSOR_MAPS==="
 set -- $(pidof system_server 2>/dev/null)
 SS_PID="${'$'}1"
@@ -197,7 +214,7 @@ if [ -r /data/adb/kuroko/daemon.log ]; then
   tail -c 131072 /data/adb/kuroko/daemon.log 2>/dev/null || true
 fi
 echo "===LOGCAT==="
-logcat -d -v threadtime -s KurokoDaemon:* KurokoZygisk:* KurokoSensorHook:* 2>/dev/null | tail -n 300 || true
+logcat -d -v threadtime -s KurokoDaemon:* KurokoZygisk:* KurokoSensorHook:* KurokoGmsHook:* 2>/dev/null | tail -n 300 || true
 logcat -d -v threadtime -t 4000 2>/dev/null | grep -E "avc:[[:space:]]*denied|AndroidRuntime|FATAL EXCEPTION|com\.kuroko\.teleport" | tail -n 300 || true
 echo "===LSPOSED_LOG==="
 LSP_FILES=$(ls -1t /data/adb/lspd/log/modules_*.log 2>/dev/null | head -n 2)
@@ -256,6 +273,14 @@ echo "===END==="
         val tcpListenRaw = sections["TCP_LISTEN"].orEmpty()
         val portListening = tcpListenRaw.lineSequence().any { it.contains(":705D", ignoreCase = true) }
 
+        val gmsStatusRawLines = sections["GMS_STATUS"].orEmpty().lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        val gmsDisabledFile = gmsStatusRawLines.any { it == "gms_disabled=1" }
+        val gmsStatusFile = gmsStatusRawLines
+            .filterNot { it.startsWith("gms_disabled=") }
+            .joinToString(" ")
+            .trim()
+        val gmsProcesses = sanitizeGmsProcs(sections["GMS_PROCS"].orEmpty())
+
         val sensorMapsSanitized = sanitizeSensorMaps(sections["SENSOR_MAPS"].orEmpty())
         val (sensorInstances, sensorVmaCount) = parseSensorMapStats(sensorMapsSanitized)
 
@@ -274,7 +299,10 @@ echo "===END==="
 
         val redactedDaemonSnap = snap.copy(
             message = redactBase(snap.message, cleanKeys),
-            status = snap.status.copy(sensorDiag = redactBase(snap.status.sensorDiag, cleanKeys))
+            status = snap.status.copy(
+                sensorDiag = redactBase(snap.status.sensorDiag, cleanKeys),
+                gmsDiag = redactBase(snap.status.gmsDiag, cleanKeys)
+            )
         )
 
         DiagnosticSnapshot(
@@ -304,6 +332,9 @@ echo "===END==="
             apkInstalledProp = redactBase(sections["APK_PROP"].orEmpty().trim(), cleanKeys),
             daemonPids = sections["DAEMON_PID"].orEmpty().trim(),
             portListening = portListening,
+            gmsDisabledFile = gmsDisabledFile,
+            gmsStatusFile = redactBase(gmsStatusFile, cleanKeys),
+            gmsProcesses = gmsProcesses,
             lsposedSensorHook = lsposedSensorHook,
             sensorServiceInstances = sensorInstances,
             sensorServiceVmaCount = sensorVmaCount,
@@ -520,7 +551,39 @@ echo "===END==="
             )
         }
 
-        // 6. SELinux Policy
+        // 6. Optional GMS Fused Location Hook (G)
+        val gmsEnabledEffective = if (connected) st.gmsEnabled else !snapshot.gmsDisabledFile
+        val gmsShmEffective = connected && st.gmsShm
+        val gmsDiagEffective = st.gmsDiag.ifBlank { snapshot.gmsStatusFile }
+        val gmsRunning = snapshot.gmsProcesses.any { it.contains("com.google.android.gms") }
+        val gmsCheck = when {
+            !gmsEnabledEffective -> HealthCheckItem(
+                id = "gms",
+                title = ctx.getString(R.string.diag_check_gms_title),
+                status = HealthStatus.PASS,
+                detail = ctx.getString(R.string.diag_check_gms_disabled)
+            )
+            gmsShmEffective -> HealthCheckItem(
+                id = "gms",
+                title = ctx.getString(R.string.diag_check_gms_title),
+                status = HealthStatus.PASS,
+                detail = ctx.getString(R.string.diag_check_gms_ok, gmsDiagEffective.ifBlank { "G✓" })
+            )
+            !gmsRunning -> HealthCheckItem(
+                id = "gms",
+                title = ctx.getString(R.string.diag_check_gms_title),
+                status = HealthStatus.PASS,
+                detail = ctx.getString(R.string.diag_check_gms_not_installed)
+            )
+            else -> HealthCheckItem(
+                id = "gms",
+                title = ctx.getString(R.string.diag_check_gms_title),
+                status = HealthStatus.WARN,
+                detail = ctx.getString(R.string.diag_check_gms_warn, gmsDiagEffective.ifBlank { "not loaded" })
+            )
+        }
+
+        // 7. SELinux Policy
         val selinuxCheck = if (snapshot.selinuxAvcCount == 0) {
             HealthCheckItem(
                 id = "selinux",
@@ -537,7 +600,7 @@ echo "===END==="
             )
         }
 
-        return listOf(daemonCheck, versionCheck, xposedCheck, sensorCheck, btCheck, selinuxCheck)
+        return listOf(daemonCheck, versionCheck, xposedCheck, sensorCheck, btCheck, gmsCheck, selinuxCheck)
     }
 
     fun buildPackageAliasMap(savedTargets: List<SavedTargetApp>): Map<String, String> {
@@ -597,10 +660,18 @@ echo "===END==="
         context: Context,
         anonymizePackages: Boolean
     ): String {
+        val ctx = AppLocaleManager.localizedContext(context)
         val checks = evaluateHealth(snapshot, context)
         val st = snapshot.daemonSnap.status
         val dev = snapshot.deviceInfo
         val aliasMap = if (anonymizePackages) buildPackageAliasMap(snapshot.savedTargets) else emptyMap()
+        val gmsEnabledEffective = if (snapshot.daemonSnap.connected) st.gmsEnabled else !snapshot.gmsDisabledFile
+        val gmsDiagEffective = st.gmsDiag.ifBlank { snapshot.gmsStatusFile }.ifBlank { "none" }
+        val gmsStateLabel = when {
+            !gmsEnabledEffective -> "OFF"
+            snapshot.daemonSnap.connected && st.gmsShm -> "G✓"
+            else -> "G-"
+        }
 
         val sb = StringBuilder(2048)
         sb.appendLine("## Kuroko Teleport Diagnostics Summary")
@@ -623,7 +694,7 @@ echo "===END==="
             "- **4-Tier Lock**: state=`${snapshot.versionCompat.state}` · " +
                 "App(`#${snapshot.appVersionCode}`) / Hook(`#${st.xposedCode}`) / " +
                 "Daemon(`v${st.modVer.ifBlank { "?" }} #${st.modCode}`) / Sensor(`#${st.zygiskCode}`) · " +
-                "SHM(`L=${if (st.locShm) "OK" else "NO"}, P=${if (st.phoneShm) "OK" else "NO"}, S=${if (st.sensorShm) "OK" else "NO"}, B=${if (st.btShm) "OK" else "OPT"}`)"
+                "SHM(`L=${if (st.locShm) "OK" else "NO"}, P=${if (st.phoneShm) "OK" else "NO"}, S=${if (st.sensorShm) "OK" else "NO"}, B=${if (st.btShm) "OK" else "OPT"}, G=$gmsStateLabel`)"
         )
         val diagEffective = st.sensorDiag.ifBlank { "none" }
         val hookSegment = if (snapshot.lsposedSensorHook.isNotBlank()) {
@@ -640,6 +711,7 @@ echo "===END==="
                 "plmn=`${st.rfMcc}-${st.rfMnc}` · cells=`${st.rfCells}` · wifis=`${st.rfWifis}` · bles=`${st.rfBles}` · " +
                 "serving=`${st.rfServing.ifBlank { "none" }}`"
         )
+        sb.appendLine("- **${ctx.getString(R.string.diag_summary_gms, gmsStateLabel, gmsDiagEffective)}**")
         sb.appendLine(
             "- **SELinux / Targets**: avc_denials=`${snapshot.selinuxAvcCount}` · " +
                 "configured_targets=`${snapshot.savedTargets.size}` (daemon_active=`${st.targetCount}`) · " +
@@ -735,6 +807,8 @@ echo "===END==="
                 put("port28765Listening", snapshot.portListening)
                 put("moduleProp", snapshot.moduleProp)
                 put("apkInstalledProp", snapshot.apkInstalledProp)
+                put("gmsDisabledFile", snapshot.gmsDisabledFile)
+                put("gmsStatusFile", snapshot.gmsStatusFile)
             })
             put("daemon", JSONObject().apply {
                 put("connected", snapshot.daemonSnap.connected)
@@ -749,6 +823,9 @@ echo "===END==="
                 put("phoneShm", st.phoneShm)
                 put("sensorShm", st.sensorShm)
                 put("btShm", st.btShm)
+                put("gmsShm", st.gmsShm)
+                put("gmsEnabled", st.gmsEnabled)
+                put("gmsDiag", st.gmsDiag)
                 put("modVer", st.modVer)
                 put("modCode", st.modCode)
                 put("protoVer", st.protoVer)
@@ -786,6 +863,9 @@ echo "===END==="
             put("sensorServiceVmaCount", snapshot.sensorServiceVmaCount)
             put("sensorServiceMaps", JSONArray().apply {
                 snapshot.sensorServiceMaps.lineSequence().filter { it.isNotBlank() }.forEach { put(it) }
+            })
+            put("gmsProcesses", JSONArray().apply {
+                snapshot.gmsProcesses.forEach { put(it) }
             })
             put("targets", JSONArray().apply {
                 for (t in snapshot.savedTargets) {
@@ -885,6 +965,12 @@ echo "===END==="
         if (snapshot.lsposedSensorHook.isNotBlank()) {
             sb.appendLine("# lsposed kuroko.sensor.hook: ${snapshot.lsposedSensorHook}")
         }
+        val gmsEnabledEff = if (snapshot.daemonSnap.connected) snapshot.daemonSnap.status.gmsEnabled else !snapshot.gmsDisabledFile
+        val gmsDiagEff = snapshot.daemonSnap.status.gmsDiag.ifBlank { snapshot.gmsStatusFile }.ifBlank { "(empty)" }
+        sb.appendLine("# GMS FLP: enabled=$gmsEnabledEff shm=${snapshot.daemonSnap.status.gmsShm} diag=$gmsDiagEff")
+        if (snapshot.gmsProcesses.isNotEmpty()) {
+            sb.appendLine("# GMS processes: ${snapshot.gmsProcesses.joinToString(", ")}")
+        }
         sb.appendLine(
             "# libsensorservice.so: ${snapshot.sensorServiceInstances} instance(s) (${snapshot.sensorServiceVmaCount} VMAs)"
         )
@@ -952,6 +1038,9 @@ echo "===END==="
         ) {
             return false
         }
+        if (AVC_GMS_SCONTEXT_REGEX.containsMatchIn(line)) {
+            return AVC_GMS_SUBJECT_REGEX.containsMatchIn(line)
+        }
         if (AVC_DIRECT_TARGET_REGEX.containsMatchIn(line)) {
             return true
         }
@@ -979,6 +1068,7 @@ echo "===END==="
         if (line.contains("KurokoDaemon") ||
             line.contains("KurokoZygisk") ||
             line.contains("KurokoSensorHook") ||
+            line.contains("KurokoGmsHook") ||
             line.contains("Kuroko-")
         ) {
             return true
@@ -1072,6 +1162,26 @@ echo "===END==="
         }
         val effectiveInstances = if (headerInstances == 0 && vmaCount > 0) 1 else headerInstances
         return effectiveInstances to vmaCount
+    }
+
+    internal fun sanitizeGmsProcs(raw: String): List<String> {
+        if (raw.isBlank()) return emptyList()
+        return raw.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .mapNotNull { line ->
+                val parts = line.split(Regex("\\s+"))
+                if (parts.size < 2) return@mapNotNull null
+                val domain = parts.first()
+                val proc = parts.last()
+                if (!domain.startsWith("u:r:") || !proc.startsWith("com.google.android.gms")) {
+                    return@mapNotNull null
+                }
+                "$domain $proc"
+            }
+            .distinct()
+            .take(8)
+            .toList()
     }
 
     private fun sanitizeSensorMaps(raw: String): String {

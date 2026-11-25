@@ -400,10 +400,22 @@
     <string name="rf_sync_ok">射频配置已同步至守护进程</string>
     <string name="rf_sync_offline_saved">已本地保存，守护进程重连后将自动下发</string>
     <string name="rf_clipboard_label">Kuroko Teleport 射频配置</string>
+    <string name="rf_gms_badge_ok">GMS G✓</string>
+    <string name="rf_gms_badge_off">GMS G-</string>
+    <string name="rf_toggle_gms_flp_title">GMS 融合定位接管</string>
+    <string name="rf_toggle_gms_flp_sub">仅在 GMS 定位进程按 UID 接管 FusedLocationProvider，绝不接触 gms.unstable（不影响 Play Integrity）；切换后需重启 GMS 或重启设备生效</string>
+    <string name="rf_gms_toggled_enabled">已开启 GMS 融合定位接管 — 请重启 GMS 或重启设备生效</string>
+    <string name="rf_gms_toggled_disabled">已关闭 GMS 融合定位接管 — 重启 GMS 或重启设备后零驻留</string>
 
-    <!-- Diagnostics Bluetooth Check -->
+    <!-- Diagnostics Bluetooth & GMS Checks -->
     <string name="diag_check_bt_title">蓝牙 / BLE 钩子 (B)</string>
     <string name="diag_check_bt_ok">蓝牙服务钩子已激活 (B✓)</string>
     <string name="diag_check_bt_unused">可选（当前无目标应用启用 BLE 策略）</string>
     <string name="diag_check_bt_missing">已有目标应用启用 BLE 策略，但蓝牙钩子未就绪 (B-)。请在 LSPosed 勾选「蓝牙 (com.android.bluetooth)」并重启。</string>
+    <string name="diag_check_gms_title">GMS 融合定位钩子（可选）</string>
+    <string name="diag_check_gms_ok">GMS 融合定位已就绪（%1$s）</string>
+    <string name="diag_check_gms_disabled">已在射频设置中关闭（GMS 进程零驻留）</string>
+    <string name="diag_check_gms_not_installed">未检测到运行中的 GMS 进程（可选功能，已跳过）</string>
+    <string name="diag_check_gms_warn">检测到 GMS 运行但钩子未激活（%1$s）。请确认 Zygisk Next 排除列表未阻止 com.google.android.gms / .persistent 加载模块。</string>
+    <string name="diag_summary_gms">GMS 融合定位: %1$s（%2$s）</string>
 </resources>

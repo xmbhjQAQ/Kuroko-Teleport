@@ -400,10 +400,22 @@
     <string name="rf_sync_ok">RF configuration synced to engine</string>
     <string name="rf_sync_offline_saved">Saved locally; will sync automatically when daemon reconnects</string>
     <string name="rf_clipboard_label">Kuroko Teleport RF Config</string>
+    <string name="rf_gms_badge_ok">GMS G✓</string>
+    <string name="rf_gms_badge_off">GMS G-</string>
+    <string name="rf_toggle_gms_flp_title">GMS Fused Location Hook</string>
+    <string name="rf_toggle_gms_flp_sub">Per-UID FLP spoofing inside GMS main/persistent process only; never touches gms.unstable (Play Integrity safe). Restart GMS or reboot after toggling.</string>
+    <string name="rf_gms_toggled_enabled">GMS FLP enabled — restart GMS or reboot to activate</string>
+    <string name="rf_gms_toggled_disabled">GMS FLP disabled — restart GMS or reboot for zero footprint</string>
 
-    <!-- Diagnostics Bluetooth Check -->
+    <!-- Diagnostics Bluetooth & GMS Checks -->
     <string name="diag_check_bt_title">Bluetooth / BLE Hook (B)</string>
     <string name="diag_check_bt_ok">com.android.bluetooth hook active (B✓)</string>
     <string name="diag_check_bt_unused">Optional (no target app uses BLE policy)</string>
     <string name="diag_check_bt_missing">Target app(s) enabled BLE policy, but B- is inactive. Enable Bluetooth (com.android.bluetooth) in LSPosed and reboot.</string>
+    <string name="diag_check_gms_title">GMS Fused Location Hook (Optional)</string>
+    <string name="diag_check_gms_ok">GMS FLP active (%1$s)</string>
+    <string name="diag_check_gms_disabled">Disabled in RF settings (zero footprint in GMS)</string>
+    <string name="diag_check_gms_not_installed">Google Play Services not running (optional — skipped)</string>
+    <string name="diag_check_gms_warn">GMS running but hook inactive (%1$s). Ensure Zygisk Next DenyList does not block com.google.android.gms / .persistent.</string>
+    <string name="diag_summary_gms">GMS FLP: %1$s (%2$s)</string>
 </resources>

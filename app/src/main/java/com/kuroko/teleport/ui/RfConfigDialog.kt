@@ -105,6 +105,7 @@ fun RfConfigDialog(
     mapCenterWgs84: GeoPoint,
     onDismiss: () -> Unit,
     onSaveAndSync: (RfConfig) -> Unit,
+    onSetGmsEnabled: (Boolean) -> Unit,
     onNotify: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -247,6 +248,7 @@ fun RfConfigDialog(
     }
 
     val st = daemonSnap.status
+    var gmsEnabledUi by remember(st.gmsEnabled) { mutableStateOf(st.gmsEnabled) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -339,22 +341,44 @@ fun RfConfigDialog(
                                 modifier = Modifier.weight(1f)
                             )
                             Spacer(Modifier.width(6.dp))
-                            val btOk = daemonSnap.connected && st.btShm
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (btOk) NeuColors.EmeraldSoft else NeuColors.InsetBg)
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
                             ) {
-                                Text(
-                                    text = stringResource(if (btOk) R.string.rf_bt_ready else R.string.rf_bt_optional),
-                                    fontSize = 9.5.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (btOk) NeuColors.EmeraldDeep else NeuColors.InkSecondary,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
+                                val btOk = daemonSnap.connected && st.btShm
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(if (btOk) NeuColors.EmeraldSoft else NeuColors.InsetBg)
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = stringResource(if (btOk) R.string.rf_bt_ready else R.string.rf_bt_optional),
+                                        fontSize = 9.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (btOk) NeuColors.EmeraldDeep else NeuColors.InkSecondary,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                                val gmsOk = daemonSnap.connected && st.gmsShm
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(if (gmsOk) NeuColors.EmeraldSoft else NeuColors.InsetBg)
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = stringResource(if (gmsOk) R.string.rf_gms_badge_ok else R.string.rf_gms_badge_off),
+                                        fontSize = 9.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (gmsOk) NeuColors.EmeraldDeep else NeuColors.InkSecondary,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
                             }
                         }
                         Text(
@@ -460,6 +484,17 @@ fun RfConfigDialog(
                                         checked = draft.spoofSimCountry,
                                         activeColor = NeuColors.AmberDeep,
                                         onCheckedChange = { draft = draft.copy(spoofSimCountry = it) }
+                                    )
+                                    HorizontalDivider(color = NeuColors.InsetDark.copy(alpha = 0.35f))
+                                    RfToggleRow(
+                                        title = stringResource(R.string.rf_toggle_gms_flp_title),
+                                        subtitle = stringResource(R.string.rf_toggle_gms_flp_sub),
+                                        checked = gmsEnabledUi,
+                                        activeColor = NeuColors.EmeraldDeep,
+                                        onCheckedChange = { enabled ->
+                                            gmsEnabledUi = enabled
+                                            onSetGmsEnabled(enabled)
+                                        }
                                     )
                                 }
                             }

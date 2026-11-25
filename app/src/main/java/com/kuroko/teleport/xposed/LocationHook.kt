@@ -1,5 +1,6 @@
 package com.kuroko.teleport.xposed
 
+import android.content.AttributionSource
 import android.location.GnssStatus
 import android.location.Location
 import android.location.LocationManager
@@ -7,6 +8,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.os.WorkSource
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
@@ -38,6 +40,8 @@ object LocationHook {
     private const val LOCATION_INTERFACE = "android.location.ILocationManager"
     private const val PUMP_INTERVAL_MS = 1000L
     private const val RECENT_DELIVERY_GUARD_MS = 850L
+    private const val FIRST_APPLICATION_UID = 10000
+    private const val PER_USER_RANGE = 100_000
 
     private val locationManagers = CopyOnWriteArraySet<Any>()
     private val gnssStatusProviders = CopyOnWriteArraySet<Any>()
@@ -45,7 +49,9 @@ object LocationHook {
 
     private val loggedOnceKeys = ConcurrentHashMap.newKeySet<String>()
     private val fieldCache = ConcurrentHashMap<String, Field>()
+    private val missingFields = ConcurrentHashMap.newKeySet<String>()
     private val methodCache = ConcurrentHashMap<String, Method>()
+    private val missingMethods = ConcurrentHashMap.newKeySet<String>()
 
     // Track last synthetic delivery per registration (WeakHashMap to avoid retaining dead registrations)
     private val lastLocationDeliveryMs = Collections.synchronizedMap(WeakHashMap<Any, Long>())
@@ -178,6 +184,8 @@ object LocationHook {
                         param.thisObject?.let { locationManagers.add(it) }
                         val uid = extractUidFromArgs(param.args)
                         param.setObjectExtra("kuroko_uid", uid)
+                        param.setObjectExtra("kuroko_ws", extractWorkSourceFromArgs(param.args))
+                        param.setObjectExtra("kuroko_attr", extractAttributionSourceFromArgs(param.args))
                         param.setObjectExtra("kuroko_perm", extractPermissionLevel(param.args))
                     } catch (_: Throwable) {
                     }
@@ -189,8 +197,19 @@ object LocationHook {
                         val permLevel = (param.getObjectExtra("kuroko_perm") as? Int) ?: 2
                         if (permLevel == 0) return
                         val uid = (param.getObjectExtra("kuroko_uid") as? Int) ?: Binder.getCallingUid()
-                        if (!ShmReader.hasPolicy(uid, ShmReader.KUROKO_POLICY_LOCATION)) return
+                        val ws = param.getObjectExtra("kuroko_ws") as? WorkSource
+                        val attr = param.getObjectExtra("kuroko_attr") as? AttributionSource
                         val snap = ShmReader.readLocationSnapshot() ?: return
+                        if (resolveEffectiveTargetPolicyUid(
+                                primaryUid = uid,
+                                workSource = ws,
+                                snap = snap,
+                                policyFlag = ShmReader.KUROKO_POLICY_LOCATION,
+                                attrSource = attr
+                            ) <= 0
+                        ) {
+                            return
+                        }
                         val provider = getProviderName(param.thisObject)
                         param.result = buildSyntheticLocation(provider, snap)
                     } catch (t: Throwable) {
@@ -210,6 +229,8 @@ object LocationHook {
                         param.thisObject?.let { locationManagers.add(it) }
                         val uid = extractUidFromArgs(param.args)
                         param.setObjectExtra("kuroko_uid", uid)
+                        param.setObjectExtra("kuroko_ws", extractWorkSourceFromArgs(param.args))
+                        param.setObjectExtra("kuroko_attr", extractAttributionSourceFromArgs(param.args))
                     } catch (_: Throwable) {
                     }
                 }
@@ -218,7 +239,16 @@ object LocationHook {
                     try {
                         if (param.throwable != null) return
                         val uid = (param.getObjectExtra("kuroko_uid") as? Int) ?: Binder.getCallingUid()
-                        if (ShmReader.hasPolicy(uid, ShmReader.KUROKO_POLICY_LOCATION)) {
+                        val ws = param.getObjectExtra("kuroko_ws") as? WorkSource
+                        val attr = param.getObjectExtra("kuroko_attr") as? AttributionSource
+                        if (resolveEffectiveTargetPolicyUid(
+                                primaryUid = uid,
+                                workSource = ws,
+                                snap = null,
+                                policyFlag = ShmReader.KUROKO_POLICY_LOCATION,
+                                attrSource = attr
+                            ) > 0
+                        ) {
                             // Immediately wake the active pump so GetCurrentLocationListenerRegistration
                             // receives a synthetic fix indoors without waiting up to 1s.
                             nudgePump()
@@ -281,9 +311,10 @@ object LocationHook {
                             try {
                                 if (inOurPump.get() == true) return
                                 val reg = param.thisObject ?: return
-                                val uid = extractUidFromRegistration(reg)
-                                if (!ShmReader.hasPolicy(uid, ShmReader.KUROKO_POLICY_LOCATION)) return
                                 val snap = ShmReader.readLocationSnapshot() ?: return
+                                if (resolveRegistrationTargetUid(reg, ShmReader.KUROKO_POLICY_LOCATION, snap) <= 0) {
+                                    return
+                                }
                                 val provider = resolveProviderFromRegistrationOrResult(reg, param.args[0])
                                 val synthLoc = buildSyntheticLocation(provider, snap)
                                 val synthRes = createLocationResult(synthLoc) ?: return
@@ -363,8 +394,7 @@ object LocationHook {
                         if (arg is Function<*, *>) {
                             val origFn = arg as Function<Any?, Any?>
                             param.args[0] = Function<Any?, Any?> { reg ->
-                                val uid = extractUidFromRegistration(reg)
-                                if (uid > 0 && ShmReader.hasPolicy(uid, policyFlag)) {
+                                if (resolveRegistrationTargetUid(reg, policyFlag) > 0) {
                                     null
                                 } else {
                                     origFn.apply(reg)
@@ -378,8 +408,7 @@ object LocationHook {
                             suppressPolicyForDeliver.set(0)
                             try {
                                 fnMethod.invoke(param.thisObject, Function<Any?, Any?> { reg ->
-                                    val uid = extractUidFromRegistration(reg)
-                                    if (uid > 0 && ShmReader.hasPolicy(uid, policyFlag)) {
+                                    if (resolveRegistrationTargetUid(reg, policyFlag) > 0) {
                                         null
                                     } else {
                                         origOp
@@ -605,8 +634,7 @@ object LocationHook {
             if (regsObj.isEmpty()) return false
             for (reg in regsObj.values) {
                 if (reg == null) continue
-                val uid = extractUidFromRegistration(reg)
-                if ((snap.policyForUid(uid) and ShmReader.KUROKO_POLICY_LOCATION) != 0) {
+                if (resolveRegistrationTargetUid(reg, ShmReader.KUROKO_POLICY_LOCATION, snap) > 0) {
                     return true
                 }
             }
@@ -629,8 +657,7 @@ object LocationHook {
         if (fnMethod != null) {
             fnMethod.invoke(manager, Function<Any?, Any?> { reg ->
                 if (reg == null) return@Function null
-                val uid = extractUidFromRegistration(reg)
-                if ((snap.policyForUid(uid) and ShmReader.KUROKO_POLICY_LOCATION) == 0) {
+                if (resolveRegistrationTargetUid(reg, ShmReader.KUROKO_POLICY_LOCATION, snap) <= 0) {
                     return@Function null
                 }
                 if (wasRecentlyDelivered(lastLocationDeliveryMs, reg, nowElapsedMs)) {
@@ -661,8 +688,7 @@ object LocationHook {
             }
         }
         for (reg in snapshotRegs) {
-            val uid = extractUidFromRegistration(reg)
-            if ((snap.policyForUid(uid) and ShmReader.KUROKO_POLICY_LOCATION) == 0) continue
+            if (resolveRegistrationTargetUid(reg, ShmReader.KUROKO_POLICY_LOCATION, snap) <= 0) continue
             if (wasRecentlyDelivered(lastLocationDeliveryMs, reg, nowElapsedMs)) continue
             if (!isRegistrationActive(reg)) continue
             val transport = getRegistrationListener(reg) ?: continue
@@ -689,8 +715,7 @@ object LocationHook {
         if (fnMethod != null && opInterface != null) {
             fnMethod.invoke(provider, Function<Any?, Any?> { reg ->
                 if (reg == null) return@Function null
-                val uid = extractUidFromRegistration(reg)
-                if ((snap.policyForUid(uid) and ShmReader.KUROKO_POLICY_LOCATION) == 0) {
+                if (resolveRegistrationTargetUid(reg, ShmReader.KUROKO_POLICY_LOCATION, snap) <= 0) {
                     return@Function null
                 }
                 if (wasRecentlyDelivered(lastSvDeliveryMs, reg, nowElapsedMs)) {
@@ -719,8 +744,7 @@ object LocationHook {
             }
         }
         for (reg in snapshotRegs) {
-            val uid = extractUidFromRegistration(reg)
-            if ((snap.policyForUid(uid) and ShmReader.KUROKO_POLICY_LOCATION) == 0) continue
+            if (resolveRegistrationTargetUid(reg, ShmReader.KUROKO_POLICY_LOCATION, snap) <= 0) continue
             if (wasRecentlyDelivered(lastSvDeliveryMs, reg, nowElapsedMs)) continue
             if (!isRegistrationActive(reg)) continue
             val listener = getRegistrationListener(reg) ?: continue
@@ -747,8 +771,7 @@ object LocationHook {
         if (fnMethod != null && opInterface != null) {
             fnMethod.invoke(provider, Function<Any?, Any?> { reg ->
                 if (reg == null) return@Function null
-                val uid = extractUidFromRegistration(reg)
-                if ((snap.policyForUid(uid) and ShmReader.KUROKO_POLICY_LOCATION) == 0) {
+                if (resolveRegistrationTargetUid(reg, ShmReader.KUROKO_POLICY_LOCATION, snap) <= 0) {
                     return@Function null
                 }
                 if (wasRecentlyDelivered(lastNmeaDeliveryMs, reg, nowElapsedMs)) {
@@ -774,8 +797,7 @@ object LocationHook {
             }
         }
         for (reg in snapshotRegs) {
-            val uid = extractUidFromRegistration(reg)
-            if ((snap.policyForUid(uid) and ShmReader.KUROKO_POLICY_LOCATION) == 0) continue
+            if (resolveRegistrationTargetUid(reg, ShmReader.KUROKO_POLICY_LOCATION, snap) <= 0) continue
             if (wasRecentlyDelivered(lastNmeaDeliveryMs, reg, nowElapsedMs)) continue
             if (!isRegistrationActive(reg)) continue
             val listener = getRegistrationListener(reg) ?: continue
@@ -958,6 +980,286 @@ object LocationHook {
         }
     }
 
+    // ==================== Strict Zero-Crosstalk WorkSource Attribution ====================
+
+    private fun isAppUid(uid: Int): Boolean {
+        return uid >= FIRST_APPLICATION_UID && (uid % PER_USER_RANGE) >= FIRST_APPLICATION_UID
+    }
+
+    private fun uidHasPolicy(uid: Int, policyFlag: Int, snap: ShmReader.LocationSnapshot?): Boolean {
+        if (uid <= 0) return false
+        return if (snap != null) {
+            (snap.policyForUid(uid) and policyFlag) != 0
+        } else {
+            ShmReader.hasPolicy(uid, policyFlag)
+        }
+    }
+
+    /**
+     * Strict zero-crosstalk target UID resolution for framework location proxies:
+     *  - Fast path: if [primaryUid] itself has [policyFlag], return [primaryUid].
+     *  - Proxy path: inspect [workSource] (both top-level UIDs and WorkChains, ignoring
+     *    [primaryUid] and non-app UIDs < 10000). Return the first matching target UID ONLY
+     *    if at least 1 app UID exists AND EVERY app UID in [workSource] has [policyFlag].
+     *    If ANY app UID is NOT targeted (mixed multi-client proxy), return -1 immediately!
+     *  - AttributionSource fallback: only if [workSource] had zero delegated app UIDs, apply
+     *    the same strict all-match rule to [attrSource].next chain.
+     */
+    fun resolveEffectiveTargetPolicyUid(
+        primaryUid: Int,
+        workSource: WorkSource?,
+        snap: ShmReader.LocationSnapshot? = null,
+        policyFlag: Int = ShmReader.KUROKO_POLICY_LOCATION,
+        attrSource: AttributionSource? = null
+    ): Int {
+        if (uidHasPolicy(primaryUid, policyFlag, snap)) {
+            return primaryUid
+        }
+
+        if (workSource != null) {
+            val wsResult = evaluateWorkSourceZeroCrosstalk(primaryUid, workSource, policyFlag, snap)
+            if (wsResult != 0) {
+                return wsResult // >0: unanimous target match; -1: mixed/non-target -> never spoof
+            }
+        }
+
+        if (attrSource != null) {
+            val attrResult = evaluateAttributionChainZeroCrosstalk(primaryUid, attrSource, policyFlag, snap)
+            if (attrResult > 0) {
+                return attrResult
+            }
+        }
+        return -1
+    }
+
+    /**
+     * Returns:
+     *  - `> 0`: first matching target UID (at least 1 app UID present and ALL app UIDs targeted)
+     *  - `-1`: at least 1 app UID present and at least one is NOT targeted (mixed/non-target)
+     *  - `0`: WorkSource contains zero delegated app UIDs (empty or only primaryUid/system UIDs)
+     */
+    private fun evaluateWorkSourceZeroCrosstalk(
+        primaryUid: Int,
+        ws: WorkSource,
+        policyFlag: Int,
+        snap: ShmReader.LocationSnapshot?
+    ): Int {
+        var firstTargetUid = -1
+        var appUidCount = 0
+
+        try {
+            // 1. Top-level WorkSource UIDs
+            val size = getWorkSourceSize(ws)
+            for (i in 0 until size) {
+                val u = getWorkSourceUidAt(ws, i)
+                if (u == primaryUid || !isAppUid(u)) continue
+                appUidCount++
+                if (!uidHasPolicy(u, policyFlag, snap)) {
+                    return -1 // Mixed multi-client or non-target client -> strict zero-crosstalk abort
+                }
+                if (firstTargetUid < 0) firstTargetUid = u
+            }
+
+            // 2. WorkChains (Android 9+ WorkSource.WorkChain)
+            val chains = getWorkSourceChains(ws)
+            if (chains != null) {
+                for (chain in chains) {
+                    if (chain == null) continue
+                    val chainUids = extractWorkChainUids(chain)
+                    for (u in chainUids) {
+                        if (u == primaryUid || !isAppUid(u)) continue
+                        appUidCount++
+                        if (!uidHasPolicy(u, policyFlag, snap)) {
+                            return -1 // Strict zero-crosstalk abort
+                        }
+                        if (firstTargetUid < 0) firstTargetUid = u
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            logOnce("ws_eval_err", "WorkSource attribution evaluation warning: $t")
+            return -1
+        }
+
+        return if (appUidCount > 0 && firstTargetUid > 0) firstTargetUid else 0
+    }
+
+    private fun evaluateAttributionChainZeroCrosstalk(
+        primaryUid: Int,
+        rootAttr: AttributionSource,
+        policyFlag: Int,
+        snap: ShmReader.LocationSnapshot?
+    ): Int {
+        var firstTargetUid = -1
+        var appUidCount = 0
+        try {
+            var cur: AttributionSource? = rootAttr.next
+            var depth = 0
+            while (cur != null && depth < 8) {
+                val u = cur.uid
+                if (u != primaryUid && isAppUid(u)) {
+                    appUidCount++
+                    if (!uidHasPolicy(u, policyFlag, snap)) {
+                        return -1
+                    }
+                    if (firstTargetUid < 0) firstTargetUid = u
+                }
+                cur = cur.next
+                depth++
+            }
+        } catch (_: Throwable) {
+            return -1
+        }
+        return if (appUidCount > 0 && firstTargetUid > 0) firstTargetUid else -1
+    }
+
+    private fun resolveRegistrationTargetUid(
+        reg: Any?,
+        policyFlag: Int,
+        snap: ShmReader.LocationSnapshot? = null
+    ): Int {
+        if (reg == null) return -1
+        val identity = extractIdentityFromRegistration(reg)
+        val primaryUid = extractUidFromIdentity(identity)
+        if (uidHasPolicy(primaryUid, policyFlag, snap)) {
+            return primaryUid
+        }
+        val ws = extractWorkSourceFromRegistration(reg)
+        val attr = extractAttributionSourceFromIdentity(identity)
+        if (ws == null && attr == null) return -1
+        return resolveEffectiveTargetPolicyUid(
+            primaryUid = primaryUid,
+            workSource = ws,
+            snap = snap,
+            policyFlag = policyFlag,
+            attrSource = attr
+        )
+    }
+
+    private fun getWorkSourceSize(ws: WorkSource): Int {
+        val m = findMethodByName(ws.javaClass, "size", 0)
+        if (m != null) {
+            val s = (m.invoke(ws) as? Int) ?: 0
+            return s.coerceIn(0, 256)
+        }
+        val num = (getFieldValue(ws, "mNum") as? Int) ?: 0
+        return num.coerceIn(0, 256)
+    }
+
+    private fun getWorkSourceUidAt(ws: WorkSource, index: Int): Int {
+        val mGetUid = findMethodByName(ws.javaClass, "getUid", 1)
+        if (mGetUid != null && mGetUid.parameterTypes[0] == Int::class.javaPrimitiveType) {
+            return (mGetUid.invoke(ws, index) as? Int) ?: -1
+        }
+        val mGet = findMethodByName(ws.javaClass, "get", 1)
+        if (mGet != null && mGet.parameterTypes[0] == Int::class.javaPrimitiveType) {
+            return (mGet.invoke(ws, index) as? Int) ?: -1
+        }
+        val uids = getFieldValue(ws, "mUids") as? IntArray ?: return -1
+        return if (index in uids.indices) uids[index] else -1
+    }
+
+    private fun getWorkSourceChains(ws: WorkSource): List<*>? {
+        val m = findMethodByName(ws.javaClass, "getWorkChains", 0)
+        if (m != null) {
+            return m.invoke(ws) as? List<*>
+        }
+        return getFieldValue(ws, "mChains") as? List<*>
+    }
+
+    private fun extractWorkChainUids(chain: Any): IntArray {
+        val uidsArr = (findMethodByName(chain.javaClass, "getUids", 0)?.invoke(chain) as? IntArray)
+            ?: (getFieldValue(chain, "mUids") as? IntArray)
+        if (uidsArr != null) {
+            val chainSize = (findMethodByName(chain.javaClass, "getSize", 0)?.invoke(chain) as? Int)
+                ?: (getFieldValue(chain, "mSize") as? Int)
+                ?: uidsArr.size
+            val n = chainSize.coerceIn(0, uidsArr.size)
+            return if (n == uidsArr.size) uidsArr else uidsArr.copyOf(n)
+        }
+        val attrUid = (findMethodByName(chain.javaClass, "getAttributionUid", 0)?.invoke(chain) as? Int) ?: -1
+        return if (attrUid > 0) intArrayOf(attrUid) else IntArray(0)
+    }
+
+    private fun extractWorkSourceFromObject(obj: Any?): WorkSource? {
+        if (obj == null) return null
+        if (obj is WorkSource) return obj
+        return try {
+            val m = findMethodByName(obj.javaClass, "getWorkSource", 0)
+            if (m != null) {
+                m.invoke(obj) as? WorkSource
+            } else {
+                getFieldValue(obj, "mWorkSource") as? WorkSource
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun extractWorkSourceFromArgs(args: Array<Any?>?): WorkSource? {
+        if (args == null) return null
+        for (arg in args) {
+            if (arg == null) continue
+            if (arg is WorkSource) return arg
+            val clsName = arg.javaClass.name
+            if (clsName.contains("Request") || clsName.endsWith("CallerIdentity")) {
+                val ws = extractWorkSourceFromObject(arg)
+                if (ws != null) return ws
+            }
+        }
+        return null
+    }
+
+    private fun extractWorkSourceFromRegistration(reg: Any): WorkSource? {
+        extractWorkSourceFromObject(reg)?.let { return it }
+        return try {
+            val req = findMethodByName(reg.javaClass, "getRequest", 0)?.invoke(reg)
+                ?: getFieldValue(reg, "mRequest")
+                ?: getFieldValue(reg, "mBaseRequest")
+                ?: getFieldValue(reg, "mProviderLocationRequest")
+            extractWorkSourceFromObject(req)
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun extractAttributionSourceFromIdentity(identity: Any?): AttributionSource? {
+        if (identity == null) return null
+        if (identity is AttributionSource) return identity
+        return try {
+            val m = findMethodByName(identity.javaClass, "getAttributionSource", 0)
+            if (m != null) {
+                m.invoke(identity) as? AttributionSource
+            } else {
+                getFieldValue(identity, "mAttributionSource") as? AttributionSource
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun extractAttributionSourceFromArgs(args: Array<Any?>?): AttributionSource? {
+        if (args == null) return null
+        for (arg in args) {
+            if (arg == null) continue
+            if (arg is AttributionSource) return arg
+            if (arg.javaClass.name.endsWith("CallerIdentity")) {
+                extractAttributionSourceFromIdentity(arg)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun extractIdentityFromRegistration(reg: Any?): Any? {
+        if (reg == null) return null
+        return try {
+            val m = findMethodByName(reg.javaClass, "getIdentity", 0)
+            if (m != null) m.invoke(reg) else getFieldValue(reg, "mIdentity")
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     // ==================== Reflection & Identity Helpers ====================
 
     private fun wasRecentlyDelivered(map: MutableMap<Any, Long>, reg: Any, nowElapsedMs: Long): Boolean {
@@ -971,6 +1273,9 @@ object LocationHook {
                 if (arg == null) continue
                 if (arg.javaClass.name.endsWith("CallerIdentity")) {
                     val uid = extractUidFromIdentity(arg)
+                    if (uid > 0) return uid
+                } else if (arg is AttributionSource) {
+                    val uid = arg.uid
                     if (uid > 0) return uid
                 }
             }
@@ -996,21 +1301,6 @@ object LocationHook {
             } else {
                 (getFieldValue(identity, "mUid") as? Int) ?: -1
             }
-        } catch (_: Throwable) {
-            -1
-        }
-    }
-
-    private fun extractUidFromRegistration(reg: Any?): Int {
-        if (reg == null) return -1
-        return try {
-            val m = findMethodByName(reg.javaClass, "getIdentity", 0)
-            val identity = if (m != null) {
-                m.invoke(reg)
-            } else {
-                getFieldValue(reg, "mIdentity")
-            }
-            extractUidFromIdentity(identity)
         } catch (_: Throwable) {
             -1
         }
@@ -1084,6 +1374,7 @@ object LocationHook {
     private fun findMethodByName(cls: Class<*>, name: String, paramCount: Int): Method? {
         val key = "${cls.name}#$name/$paramCount"
         methodCache[key]?.let { return it }
+        if (missingMethods.contains(key)) return null
         var cur: Class<*>? = cls
         while (cur != null && cur != Any::class.java) {
             for (m in cur.declaredMethods) {
@@ -1095,6 +1386,7 @@ object LocationHook {
             }
             cur = cur.superclass
         }
+        missingMethods.add(key)
         return null
     }
 
@@ -1102,6 +1394,7 @@ object LocationHook {
         val key = "${obj.javaClass.name}.$fieldName"
         var f = fieldCache[key]
         if (f == null) {
+            if (missingFields.contains(key)) return null
             var cur: Class<*>? = obj.javaClass
             while (cur != null && cur != Any::class.java) {
                 try {
@@ -1114,9 +1407,13 @@ object LocationHook {
                     cur = cur.superclass
                 }
             }
+            if (f == null) {
+                missingFields.add(key)
+                return null
+            }
         }
         return try {
-            f?.get(obj)
+            f.get(obj)
         } catch (_: Throwable) {
             null
         }
