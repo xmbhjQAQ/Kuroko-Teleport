@@ -342,9 +342,23 @@ void SimEngine::set_rf_beacons(const std::vector<PinnedBleBeacon>& beacons) {
 void SimEngine::reset_steps() {
     std::lock_guard<std::mutex> lk(mu_);
     virtual_steps_ = 0;
+    last_step_boot_ns_ = 0;
+}
+
+void SimEngine::reset_route() {
+    std::lock_guard<std::mutex> lk(mu_);
+    dist_on_route_m_ = 0.0;
     total_distance_m_ = 0.0;
     lap_count_ = 0;
-    dist_on_route_m_ = 0.0;
+    route_epoch_++;
+    rf_dirty_ = true;
+    if (samples_.size() >= 2 && route_length_m_ > 1e-3) {
+        float dummy_cf = 1.0f;
+        sample_route_at_locked(0.0, &cur_lat_, &cur_lon_, &cur_alt_, &cur_bearing_deg_, &dummy_cf);
+        disp_lat_ = cur_lat_;
+        disp_lon_ = cur_lon_;
+        disp_alt_ = cur_alt_;
+    }
 }
 
 void SimEngine::update_biomechanics_locked(double dt_sec, uint64_t boot_ns, float eff_speed) {

@@ -1177,6 +1177,9 @@ std::string handle_command(const std::string& line) {
     } else if (cmd == "RESET_STEPS") {
         g_engine.reset_steps();
         return "OK RESET_STEPS\n";
+    } else if (cmd == "RESET_ROUTE") {
+        g_engine.reset_route();
+        return "OK RESET_ROUTE\n";
     } else if (cmd == "SET_POINT") {
         double lat = 0, lon = 0, alt = 45.0;
         if (!(iss >> lat >> lon)) return "ERR BAD_ARGS\n";

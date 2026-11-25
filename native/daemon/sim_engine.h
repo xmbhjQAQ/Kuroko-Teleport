@@ -67,6 +67,7 @@ public:
     void set_rf_wifis(const std::vector<PinnedWifiAp>& wifis);
     void set_rf_beacons(const std::vector<PinnedBleBeacon>& beacons);
     void reset_steps();
+    void reset_route();
 
     void step(double dt_sec, uint64_t boot_ns, uint64_t utc_ms, KurokoShm* shm);
 

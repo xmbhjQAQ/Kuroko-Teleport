@@ -8,7 +8,7 @@
 
 Kuroko Teleport 采用 **“单一版本契约 (`version.properties`) + 单写者 Native 物理与射频引擎 + 16KB 无锁共享内存 (`KurokoShm v2`) + 系统侧多进程消费”** 的解耦架构，并通过 All-in-One KSU2 模块（`id=kuroko_teleport` / `name=Kuroko Teleport`，产物 `dist/kuroko-teleport-ksu-module.zip`）实现单包同步分发、全链路多语言、Release 更新检查与离线诊断支持：
 
-- **控制层 (`com.kuroko.teleport` v0.7.0 / code=13)**：基于 Jetpack Compose + MapLibre Native `11.12.2` 的 Braun 亮色新拟态主控 App，经进程级共享状态中心 `KurokoRuntime` 统筹 `MainActivity`、`FloatingOverlayService`（Android 14–17 `specialUse` 前台保活、`kuroko_hud_channel`）、数据驱动多语言管理器 `AppLocaleManager`（`kuroko_locale_prefs`）、全球射频配置中心（`RfConfigStore` `kuroko_rf_v1` + `RfLiveImporter` + `RfConfigDialog`）、Release 更新检查器（`UpdateChecker` + `UpdateDialog`）、按需诊断中心（`AppLogBuffer` + `DiagnosticCollector` + `DiagnosticsDialog`）、内置「计步 / IMU 传感器自检」会话以及**四端严格版本锁定状态机 (`VersionCompatState`)**，通过 `127.0.0.1:28765`（Token 鉴权，`KurokoProtocol` IPC v3）向守护进程下发 WGS-84 轨迹、运动参数、射频配置与语言偏好 (`SET_LANG`)。
+- **控制层 (`com.kuroko.teleport` v0.7.0 / code=13)**：基于 Jetpack Compose + MapLibre Native `11.12.2` 的 Braun 亮色新拟态主控 App，经进程级共享状态中心 `KurokoRuntime` 统筹 `MainActivity`、`FloatingOverlayService`（Android 14–17 `specialUse` 前台保活、`kuroko_hud_channel`）、数据驱动多语言管理器 `AppLocaleManager`（`kuroko_locale_prefs`）、全球射频配置中心（`RfConfigStore` `kuroko_rf_v1` + `RfLiveImporter` + `RfConfigDialog`）、Release 更新检查器（`UpdateChecker` + `UpdateDialog`）、按需诊断中心（`AppLogBuffer` + `DiagnosticCollector` + `DiagnosticsDialog`）、内置「计步 / IMU 传感器自检」会话以及**四端严格版本锁定状态机 (`VersionCompatState`)**，通过 `127.0.0.1:28765`（Token 鉴权，`KurokoProtocol` IPC v3）向守护进程下发 WGS-84 轨迹、运动参数、射频配置与语言偏好 (`SET_LANG`)；每次应用目标策略或启动模拟前，`RouteStore` 均通过 `PackageManager` 为当前用户重新解析所有已保存目标包的实时 UID，自动清理已卸载应用并刷新重装后的新 UID，彻底杜绝 UID 复用串扰。
 - **物理与全球射频仿真源 (`kuroko_daemon` v0.7.0 / code=13)**：KSU2 `post-fs-data.sh` 拉起的独立 C++20 Root 守护进程（不受 Android App 墓碑与省电冻结影响，带 256 KB 原子轮转 `/data/adb/kuroko/daemon.log`），以 **50Hz (20ms)** 节拍推进轨迹运动学、双时间尺度 OU 配速波动、OU 有色 GPS 抖动、纬度感知偶极子地磁与生物力学 5 路 IMU，以 **1Hz** 刷新多星座 GNSS/NMEA 及全球地理感知射频快照 `RfSynthesizer`（4G/5G 基站、区域 Wi-Fi AP 列表、BLE/iBeacon 与国家码），通过 Seqlock 原子写入 16KB 匿名 `memfd`（`"kuroko_shm"`）；并对外通过 `/proc/self/fd/<g_memfd>` 以 `O_RDONLY` 重新打开只读句柄 `g_memfd_ro` 进行跨进程分发。
 - **系统侧与 GMS 定位代理消费层（目标 App 零注入 · Play Integrity 安全）**：
   - **Native 传感器引擎（Zygisk Next `kuroko_zygisk` · `system_server` `v0.7.0` / code=13）**：零 C `dlopen` 导入，主路径通过 JNI `java.lang.System.load` 在 `default` linker namespace 加载唯一一份 `libsensorservice.so` 并执行 **8 逻辑槽位纯 PLT/GOT Hook**（20 条多版本候选符号，已过滤 `arg4=-1` 哨兵），辅以 `StepInjectorThread` 内置纯 C++ ARM64 ELF64 `.rela.plt` GOT 自愈看门狗；同时在 `kuroko.sensor.hook` 与 `<=1Hz` 实时遥测 `kuroko.sensor.diag` 中携带 `mv=13`。
@@ -28,7 +28,7 @@ flowchart TB
     end
 
     subgraph DAEMON["核心仿真层 (v0.7.0 KSU2 Root 独立守护进程 kuroko_daemon, 免疫墓碑冻结)"]
-        TCP["TCP 控制服务 (IPC v3)\n127.0.0.1:28765 (Token 鉴权)\n19 命令 (含 SET_RF_* / SET_GMS / SET_LANG) · 扩展 STATUS"]
+        TCP["TCP 控制服务 (IPC v3)\n127.0.0.1:28765 (Token 鉴权)\n20 命令 (含 RESET_ROUTE / SET_RF_* / SET_GMS / SET_LANG) · 扩展 STATUS"]
         SIM["SimEngine (50Hz) + GnssGenerator + RfSynthesizer (1Hz)\nCatmull-Rom + OU 配速/漂移 + 偶极子地磁 + 5 路 IMU\n18 星 GNSS/NMEA + 全球 4G/5G 基站 + Wi-Fi AP + BLE/iBeacon"]
         SHM[("16KB memfd (kuroko_shm) 匿名共享内存\n读写端 g_memfd -> 只读分发端 g_memfd_ro\nKurokoShm v2 Seqlock (magic=0x4F52554B, ver=2)")]
         UNIX["Root Unix Socket\n/dev/kuroko_root.sock (0600)"]
@@ -219,23 +219,24 @@ flowchart LR
 - **单一事实源（`version.properties`）**：`RELEASE_VERSION_NAME=0.7.0`、`RELEASE_VERSION_CODE=13`、`SHM_SCHEMA_VERSION=2`、`IPC_PROTOCOL_VERSION=3`、`MIN_COMPAT_MODULE_CODE=13`、`MIN_COMPAT_APP_CODE=13`，同步驱动 CMake（`CMAKE_CONFIGURE_DEPENDS`）、Gradle（含 `ci`/`release` 双通道构建标志与 Release `updateJson`）、`module.prop` 与 `build_module.py`。
 - **严格锁定判定（`VersionCompatState`）**：仅当 `modCode == APP_VERSION_CODE && modVer == APP_VERSION_NAME && protoVer == IPC_PROTOCOL_VERSION && shmVer == SHM_SCHEMA_VERSION && (!locShm || xposedCode == APP_VERSION_CODE) && (!sensorShm || zygiskCode == APP_VERSION_CODE)` 全部满足时才为 `MATCHED`（`canStartSimulation = true`）；**`btShm` 与 `gmsShm` 均为可选增强项，未启用蓝牙/未勾选 `com.android.bluetooth` 或无 GMS/关闭 GMS FLP 绝不触发版本锁定**。仅已加载系统 Hook 滞后于已对齐的 Daemon 时判为 `REBOOT_REQUIRED`；其余不匹配判为 `MISMATCH_LOCKED`。全链路拦截启动/继续/定点/自检发步，永远放行停止/暂停/重连/设置/路线。
 
-### 4.4 本地 TCP 控制平面（`127.0.0.1:28765`，IPC v3 · 19 命令 / 扩展 `STATUS`）
+### 4.4 本地 TCP 控制平面（`127.0.0.1:28765`，IPC v3 · 20 命令 / 扩展 `STATUS`）
 
-首行强制 `AUTH <128-bit hex token>`（`/data/adb/kuroko/token` `0600`），支持以下 19 条命令：
+首行强制 `AUTH <128-bit hex token>`（`/data/adb/kuroko/token` `0600`），支持以下 20 条命令：
 
 | 命令 | 参数格式 | 功能 |
 | :--- | :--- | :--- |
 | `PING` | 无 | 存活探活（返回 `OK PONG`） |
 | `STATUS` | 无 | 返回扩展 JSON（坐标/速度/步态/目标/各路 SHM 含 `bt_shm`/`gms_shm`/`gms_enabled`/`gms_diag`/`sensor_diag` + 四端版本/协议字段 + `rf_country`/`rf_mcc`/`rf_mnc`/`rf_cells`/`rf_wifis`/`rf_bles`/`rf_serving`） |
 | `START` / `HOLD` / `STOP` | 无 | 启动运动 / 原地驻留（配合显式非静止 `mode` 可原地发步） / 停止恢复真机 |
-| `RESET_STEPS` | 无 | 重置虚拟步数、累计里程与圈数（Native 注入端保持 `emitted_steps` 单调递增） |
+| `RESET_STEPS` | 无 | 仅重置 `virtual_steps`（`virtual_steps_` / `last_step_boot_ns_`），绝不干扰当前路线进度、坐标、累计里程与圈数（Native 注入端保持 `emitted_steps` 单调递增） |
+| `RESET_ROUTE` | 无 | 重置路线进度、累计里程与圈数并回位至路线起点，不归零 `virtual_steps` |
 | `SET_POINT` | `<lat> <lon> [alt]` | 设置单点静止虚拟坐标（WGS-84，重置 `max_laps=0`） |
 | `SET_ROUTE` | 4 参：`<loop 0\|1> <max_dist_m> <max_laps 0\|N> <lat,lon,alt;...>`<br>（兼容 3 参） | 下发路线航点序列、循环标志、目标里程与重复圈数上限 |
 | `SET_SPEED` | `<speed_mps>` | 设置目标平均速度（`0.0 ~ 30.0 m/s`） |
 | `SET_PACE_VAR` | `<ratio>` | 设置双时间尺度跑步配速波动系数（`0.0 ~ 0.25`，默认 `0.08`） |
 | `SET_MODE` | `<motion_mode 0..5> [carry_mode 0\|1]` | 设置步态模式与携带姿态（手持摆臂/裤兜） |
 | `SET_JITTER` | `<sigma_m>` | 设置 OU GPS 抖动标准差（`0.0 ~ 25.0 m`） |
-| `SET_TARGETS` | `NONE` 或 `<uid:policy_mask,...>` | 下发最多 32 个目标 UID 及其策略位掩码 |
+| `SET_TARGETS` | `NONE` 或 `<uid:policy_mask,...>` | 下发最多 32 个目标 UID 及其策略位掩码；客户端下发前由 `RouteStore` 经 `PackageManager` 按当前用户重新解析全部已保存目标包的实时 UID，自动剪除已卸载应用并更新变更 UID，防止 UID 复用泄漏 |
 | `SET_LANG` | `<auto\|BCP-47>`（正则 `^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8}){0,2}$`, `<=16`） | `auto` 删除 `/data/adb/kuroko/lang`，合法 BCP-47 原子写入 `0600` 文件供 `customize.sh` 刷机/升级读取 |
 | `SET_RF_CONFIG` | `<rf_flags> <mcc> <mnc> <mnc_digits> <country_iso\|AUTO> <alpha_b64\|AUTO>` | **`v0.7.0` 新增**：配置全球射频总开关与运营商覆盖（`mcc=0` 且 `AUTO` 时按虚拟 WGS-84 坐标自动匹配当地运营商与无线法规） |
 | `SET_RF_CELLS` | `NONE` 或 `<rat:mcc:mnc:digits:tac:ci:pci:arfcn:band:rsrp:pin_lat:pin_lon;...>` | **`v0.7.0` 新增**：下发最多 4 个用户固定基站（`pin_lat=999` 表示始终跟随当前位置） |
@@ -316,7 +317,7 @@ flowchart TD
 - **双进程 4G/5G 蜂窝基站、实时热切换与 `ISub` SIM 改写（`TelephonyHook.kt` & `VirtualCellBuilder.kt`）**：
   - `VirtualCellBuilder.kt` 经缓存反射构造 Android 12–17 `CellInfoLte` / `CellInfoNr`（`CellIdentity*` + `CellSignalStrength*`）与 `GsmCellLocation`；克隆改写 `ServiceState` 时同步修改外层运营商名/数字码、克隆 `NetworkRegistrationInfo` 的 `mCellIdentity` 与 `mRplmn`（及在开启本地 SIM 同步时置 `roaming=false`）；并新增 `rewriteSubscriptionInfo()`（Android 14–17 优先 `SubscriptionInfo.Builder(orig)` 拷贝构造，Android 12–13 回退 `Parcel` 克隆），零修改全局缓存。
   - `com.android.phone` 同时 Hook `PhoneInterfaceManager`（`getAllCellInfo`/`requestCellInfoUpdate*`/`getCellLocation`/`getLastKnownCellIdentity`/`getServiceState*`/`getSimCarrierIdName` 等）与 `ISub`（Android 14–17 `SubscriptionManagerService` / Android 12–13 `SubscriptionController` 的全部 `SubscriptionInfo` 查询接口）：`SPOOF_CELL` 返回虚拟 4G/5G 基站与网络标识，并在开启 `KUROKO_RF_FLAG_SPOOF_SIM_COUNTRY` 时按 UID 同步改写 `SubscriptionInfo` 的 `countryIso`/`mcc`/`mnc`/`carrierName`/`displayName`；`HIDE_CELL && !SPOOF_CELL` 维持隐藏返回空/null。
-  - `system_server` (`TelephonyRegistry`) 对 `SPOOF_CELL` 按 `Record.callerUid` 拦截并改写回调派发（`onCellInfoChanged`/`onCellLocationChanged`/`onServiceStateChanged`），零全局 `mCellInfo` 污染；并启动 **`Kuroko-1Hz-Tel`** 主动变更泵（跟踪用户态 App `UID >= 10000` 的 `IPhoneStateListener` 与 `IOnSubscriptionsChangedListener`，在 `listenWithEventList` / `remove` / `removeOnSubscriptionsChangedListener` 注销时即时清理），跨国/跨区切换或开关「本地 SIM 国家码同步」时 1 秒内热推送新 `ServiceState` / `CellLocation` / `CellInfo` / `onSubscriptionsChanged()`，停止模拟时自动回推一次真实 `ServiceState` 还原；同时豁免 HyperOS 4 `GpsProxyManager` 与 `MiuiBlurLocationManagerImpl`（`HyperOsHook.kt`）。
+  - `system_server` (`TelephonyRegistry`) 对 `SPOOF_CELL` 按 `Record.callerUid` 拦截并改写回调派发（`onCellInfoChanged`/`onCellLocationChanged`/`onServiceStateChanged`），零全局 `mCellInfo` 污染；并启动 **`Kuroko-1Hz-Tel`** 主动变更泵——仅跟踪在 `afterHookedMethod` 中经 `TelephonyRegistry` 校验接受并实际留在 `mRecords` 内的用户态 App（`UID >= 10000`）`IPhoneStateListener` / `IOnSubscriptionsChangedListener` 注册项（在抛异常、拒绝注册或 `listenWithEventList` / `remove` / `removeOnSubscriptionsChangedListener` 注销时即时剔除），严格遵循每条存活 `Record` 自身的 `phoneId`/`subId` 与实时 `checkFineLocationAccess` / `checkCoarseLocationAccess` 权限校验（对缺乏精确位置权限的接收方调用 `ServiceState.createLocationInfoSanitizedCopy` 脱敏并在反射失败时安全拒发），**绝不回退至未脱敏的全局 `ServiceState` 缓存**；跨国/跨区切换或开关「本地 SIM 国家码同步」时 1 秒内热推送新 `ServiceState` / `CellLocation` / `CellInfo` / `onSubscriptionsChanged()`，停止模拟时自动按对应卡槽回推经权限脱敏的真实 `ServiceState` 还原；同时豁免 HyperOS 4 `GpsProxyManager` 与 `MiuiBlurLocationManagerImpl`（`HyperOsHook.kt`）。
 - **蓝牙 APEX 扫描隔离与 1Hz 虚拟 iBeacon 注入（`BluetoothHook.kt` · 可选）**：
   - `system_server` 捕获 `service-bluetooth.jar` APEX ClassLoader，钩取 `BluetoothManagerService$BluetoothServiceConnection.onServiceConnected` / `AdapterBinder` / `registerAdapter`，将远程 `IAdapter` / `IBluetooth` `IBinder` 缓存至 `ShmReader.cachedBluetoothBinder`，供 `kuroko_daemon` 经仅 Root 权限 `KUROKO_BINDER_TX_GET_BT_BINDER` 直接推送 `g_memfd_ro`。
   - `com.android.bluetooth`（`/apex/com.android.bt` `Bluetooth.apk`，兼容 `com.google.android.bluetooth`）同时 Hook `AdapterBinder`（`android.bluetooth.IAdapter$Stub`）与 `AdapterServiceBinder`（`android.bluetooth.IBluetooth$Stub`）按动态接口描述接收 `g_memfd_ro`；在 Android 16/17 `le_scan.{ScanController,ScanBinder,ScannerMap,ScannerApp,ScanClient}` 与 Android 12–15 `gatt.GattService` 中按调用方 `appUid` 抑制真实 `onScanResult`/`onBatchScanResults`（零影响已配对耳机/手表与常规 GATT），并由 1Hz 虚拟注入器构造真实 `android.bluetooth.le.ScanResult`（`ScanRecord.parseFromBytes(advBytes)` + 校验调用方 `ScanFilter.matches()`）按 UID 派发；同步在 `RemoteDevices`/`AdapterService.startDiscovery` 按 UID 抑制经典蓝牙 `ACTION_FOUND`。
