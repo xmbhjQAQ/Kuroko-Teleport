@@ -141,9 +141,7 @@ object VirtualCellBuilder {
             if (opNum.length >= 5) {
                 copy.setOperatorName(alpha, alpha, opNum)
             }
-            if (servingIdentity != null) {
-                rewriteNriCellIdentities(copy, servingIdentity)
-            }
+            rewriteNriCellIdentities(copy, servingIdentity, opNum)
             copy
         } catch (t: Throwable) {
             logOnce("rewrite_ss", "rewriteServiceState warning: $t")
@@ -151,16 +149,34 @@ object VirtualCellBuilder {
         }
     }
 
-    private fun rewriteNriCellIdentities(ssCopy: ServiceState, servingIdentity: CellIdentity) {
+    private fun rewriteNriCellIdentities(
+        ssCopy: ServiceState,
+        servingIdentity: CellIdentity?,
+        opNum: String
+    ) {
         try {
             val listObj = getFieldValue(ssCopy, "mNetworkRegistrationInfos") as? MutableList<*> ?: return
             @Suppress("UNCHECKED_CAST")
             val mutList = listObj as MutableList<Any?>
             for (i in mutList.indices) {
                 val nri = mutList[i] as? NetworkRegistrationInfo ?: continue
-                if (getFieldValue(nri, "mCellIdentity") == null) continue
+                val hasCid = getFieldValue(nri, "mCellIdentity") != null
+                val hasRplmn = !((getFieldValue(nri, "mRplmn") as? String).isNullOrEmpty())
+                val hasRegPlmn = !((getFieldValue(nri, "mRegisteredPlmn") as? String).isNullOrEmpty())
+                val hasPlmn = hasRplmn || hasRegPlmn
+                if (!hasCid && !hasPlmn) continue
                 val cloned = cloneParcelable(nri, NetworkRegistrationInfo.CREATOR) ?: continue
-                setFieldValue(cloned, "mCellIdentity", servingIdentity)
+                if (servingIdentity != null && hasCid) {
+                    setFieldValue(cloned, "mCellIdentity", servingIdentity)
+                }
+                if (opNum.length >= 5 && hasPlmn) {
+                    if (hasRplmn) {
+                        setFieldValue(cloned, "mRplmn", opNum)
+                    }
+                    if (hasRegPlmn) {
+                        setFieldValue(cloned, "mRegisteredPlmn", opNum)
+                    }
+                }
                 mutList[i] = cloned
             }
         } catch (_: Throwable) {
