@@ -210,6 +210,36 @@ void build_ibeacon_ad(const uint8_t uuid[16], uint16_t major, uint16_t minor, in
     *out_len = 30;
 }
 
+// Return the longest byte length <= min(len, max_bytes) that does not split a UTF-8 code point.
+size_t utf8_safe_prefix_len(const char* s, size_t len, size_t max_bytes) {
+    if (!s || len == 0 || max_bytes == 0) return 0;
+    size_t n = std::min(len, max_bytes);
+    size_t back = 0;
+    while (back < n && back < 4u &&
+           (static_cast<unsigned char>(s[n - 1 - back]) & 0xC0u) == 0x80u) {
+        ++back;
+    }
+    if (back == n) return 0;
+    size_t lead_idx = n - 1 - back;
+    unsigned char lead = static_cast<unsigned char>(s[lead_idx]);
+    size_t expected = 1;
+    if ((lead & 0x80u) == 0x00u) {
+        expected = 1;
+    } else if ((lead & 0xE0u) == 0xC0u) {
+        expected = 2;
+    } else if ((lead & 0xF0u) == 0xE0u) {
+        expected = 3;
+    } else if ((lead & 0xF8u) == 0xF0u) {
+        expected = 4;
+    } else {
+        return lead_idx;
+    }
+    size_t have = n - lead_idx;
+    if (have < expected) return lead_idx;
+    if (have > expected) return lead_idx + expected;
+    return n;
+}
+
 void build_generic_ble_ad(const char* name, uint8_t name_len, uint8_t out_adv[62], uint8_t* out_len) {
     std::memset(out_adv, 0, 62);
     out_adv[0] = 0x02;
@@ -217,8 +247,8 @@ void build_generic_ble_ad(const char* name, uint8_t name_len, uint8_t out_adv[62
     out_adv[2] = 0x06;
     uint8_t pos = 3;
     if (name && name_len > 0) {
-        uint8_t n = std::min<uint8_t>(name_len, 24);
-        if (static_cast<size_t>(pos) + 2u + n <= 62u) {
+        uint8_t n = static_cast<uint8_t>(utf8_safe_prefix_len(name, name_len, 24));
+        if (n > 0 && static_cast<size_t>(pos) + 2u + n <= 62u) {
             out_adv[pos++] = static_cast<uint8_t>(n + 1u);
             out_adv[pos++] = 0x09; // Complete Local Name
             std::memcpy(out_adv + pos, name, n);
@@ -230,10 +260,9 @@ void build_generic_ble_ad(const char* name, uint8_t name_len, uint8_t out_adv[62
 
 void copy_cstr_padded(char* dst, size_t cap, const char* src) {
     std::memset(dst, 0, cap);
-    if (!src || cap == 0) return;
-    size_t n = std::strlen(src);
-    if (n >= cap) n = cap - 1;
-    std::memcpy(dst, src, n);
+    if (!src || cap <= 1) return;
+    size_t n = utf8_safe_prefix_len(src, std::strlen(src), cap - 1);
+    if (n > 0) std::memcpy(dst, src, n);
 }
 
 } // namespace
@@ -512,7 +541,7 @@ void RfSynthesizer::update(double lat_deg, double lon_deg, uint64_t boot_ns, dou
         if (pw.frequency_mhz >= 5000) fl |= KUROKO_WIFI_FLAG_IS_5GHZ;
         ap.flags = fl;
 
-        size_t slen = std::min<size_t>(pw.ssid.size(), 32);
+        size_t slen = utf8_safe_prefix_len(pw.ssid.data(), pw.ssid.size(), 32);
         ap.ssid_len = static_cast<uint8_t>(slen);
         if (slen > 0) std::memcpy(ap.ssid, pw.ssid.data(), slen);
         copy_cstr_padded(ap.capabilities, sizeof(ap.capabilities), "[WPA2-PSK-CCMP][RSN-PSK-CCMP][ESS]");
@@ -575,9 +604,9 @@ void RfSynthesizer::update(double lat_deg, double lon_deg, uint64_t boot_ns, dou
                     } else {
                         std::snprintf(ssid_buf, sizeof(ssid_buf), "%s%04X", prefix, suffix);
                     }
-                    size_t slen = std::min<size_t>(std::strlen(ssid_buf), 32);
+                    size_t slen = utf8_safe_prefix_len(ssid_buf, std::strlen(ssid_buf), 32);
                     ap.ssid_len = static_cast<uint8_t>(slen);
-                    std::memcpy(ap.ssid, ssid_buf, slen);
+                    if (slen > 0) std::memcpy(ap.ssid, ssid_buf, slen);
 
                     const char* caps = ((h0 >> 48) & 1u)
                                            ? "[WPA2-PSK-CCMP][RSN-PSK+SAE-CCMP][ESS]"
@@ -640,7 +669,7 @@ void RfSynthesizer::update(double lat_deg, double lon_deg, uint64_t boot_ns, dou
         if (d.device_type == KUROKO_BLE_TYPE_GENERIC) {
             d.flags |= KUROKO_BLE_FLAG_CONNECTABLE;
         }
-        size_t nlen = std::min<size_t>(pb.name.size(), 24);
+        size_t nlen = utf8_safe_prefix_len(pb.name.data(), pb.name.size(), 24);
         d.name_len = static_cast<uint8_t>(nlen);
         if (nlen > 0) std::memcpy(d.name, pb.name.data(), nlen);
         d.tx_power_dbm = pb.tx_power_dbm;
@@ -703,9 +732,9 @@ void RfSynthesizer::update(double lat_deg, double lon_deg, uint64_t boot_ns, dou
                 const char* base_name = kAmbientBleNames[(h0 >> 32) % kNumAmbientBleNames];
                 char nbuf[28]{};
                 std::snprintf(nbuf, sizeof(nbuf), "%s-%02X%02X", base_name, d.mac[4], d.mac[5]);
-                size_t nlen = std::min<size_t>(std::strlen(nbuf), 24);
+                size_t nlen = utf8_safe_prefix_len(nbuf, std::strlen(nbuf), 24);
                 d.name_len = static_cast<uint8_t>(nlen);
-                std::memcpy(d.name, nbuf, nlen);
+                if (nlen > 0) std::memcpy(d.name, nbuf, nlen);
                 build_generic_ble_ad(d.name, d.name_len, d.adv_bytes, &d.adv_len);
                 ble_cands.push_back(d);
             }

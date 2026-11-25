@@ -60,6 +60,7 @@ namespace {
 std::atomic<bool> g_running{true};
 int g_memfd = -1;
 int g_memfd_ro = -1;
+uint64_t g_memfd_ino = 0;
 KurokoShm* g_shm = nullptr;
 std::string g_auth_token;
 kuroko::SimEngine g_engine;
@@ -223,7 +224,12 @@ bool create_shared_mem() {
         LOGI("Opened read-only memfd handle=%d via %s", g_memfd_ro, proc_fd);
     }
 
-    LOGI("Created memfd=%d (ro=%d) mapped at %p (%u bytes)", g_memfd, g_memfd_ro, ptr, KUROKO_SHM_SIZE);
+    struct stat mst{};
+    if (fstat(g_memfd, &mst) == 0) {
+        g_memfd_ino = static_cast<uint64_t>(mst.st_ino);
+    }
+    LOGI("Created memfd=%d (ro=%d, ino=%llu) mapped at %p (%u bytes)",
+         g_memfd, g_memfd_ro, static_cast<unsigned long long>(g_memfd_ino), ptr, KUROKO_SHM_SIZE);
     return true;
 }
 
@@ -767,7 +773,55 @@ void binder_pusher_loop() {
     }
 }
 
-/* ===== GMS FLP Live Telemetry Reader ===== */
+/* ===== GMS FLP Live Telemetry Reader (UID + Current Daemon Instance Verified) ===== */
+int resolve_installed_gms_app_id() {
+    FILE* fp = std::fopen("/data/system/packages.list", "r");
+    if (fp) {
+        char line[1024];
+        while (std::fgets(line, sizeof(line), fp)) {
+            char pkg[128]{};
+            unsigned long app_id_ul = 0;
+            int debuggable = 0;
+            char data_dir[256]{};
+            int n = std::sscanf(line, "%127s %lu %d %255s", pkg, &app_id_ul, &debuggable, data_dir);
+            if (n >= 2 && std::strcmp(pkg, "com.google.android.gms") == 0) {
+                std::fclose(fp);
+                if (app_id_ul < 10000UL || app_id_ul >= 100000UL) return -1;
+                int app_id = static_cast<int>(app_id_ul);
+                struct stat st{};
+                const char* check_dir = (n >= 4 && data_dir[0] == '/')
+                                            ? data_dir
+                                            : "/data/user/0/com.google.android.gms";
+                if (stat(check_dir, &st) == 0) {
+                    return (static_cast<int>(st.st_uid % 100000u) == app_id) ? app_id : -1;
+                }
+                if (std::strcmp(check_dir, "/data/user/0/com.google.android.gms") != 0 &&
+                    stat("/data/user/0/com.google.android.gms", &st) == 0) {
+                    return (static_cast<int>(st.st_uid % 100000u) == app_id) ? app_id : -1;
+                }
+                return app_id;
+            }
+        }
+        std::fclose(fp);
+        return -1; // packages.list readable and com.google.android.gms is not installed
+    }
+
+    static const char* const kFallbackDirs[] = {
+        "/data/user/0/com.google.android.gms",
+        "/data/data/com.google.android.gms",
+    };
+    for (const char* dir : kFallbackDirs) {
+        struct stat st{};
+        if (stat(dir, &st) == 0) {
+            uint32_t app_id = st.st_uid % 100000u;
+            if (app_id >= 10000u && app_id < 100000u) {
+                return static_cast<int>(app_id);
+            }
+        }
+    }
+    return -1;
+}
+
 void read_gms_status(bool* out_gms_shm_ok, bool* out_gms_enabled, std::string* out_gms_diag) {
     bool enabled = (access(KUROKO_GMS_DISABLED_PATH, F_OK) != 0);
     if (out_gms_enabled) *out_gms_enabled = enabled;
@@ -783,6 +837,9 @@ void read_gms_status(bool* out_gms_shm_ok, bool* out_gms_enabled, std::string* o
     if (!fp) return;
 
     int32_t pid = 0;
+    uint32_t reported_uid = 0;
+    int32_t daemon_pid = 0;
+    uint64_t shm_ino = 0;
     std::string status;
     char line[320];
     while (std::fgets(line, sizeof(line), fp)) {
@@ -792,6 +849,12 @@ void read_gms_status(bool* out_gms_shm_ok, bool* out_gms_enabled, std::string* o
         }
         if (std::strncmp(line, "pid=", 4) == 0) {
             pid = static_cast<int32_t>(std::strtol(line + 4, nullptr, 10));
+        } else if (std::strncmp(line, "uid=", 4) == 0) {
+            reported_uid = static_cast<uint32_t>(std::strtoul(line + 4, nullptr, 10));
+        } else if (std::strncmp(line, "daemon_pid=", 11) == 0) {
+            daemon_pid = static_cast<int32_t>(std::strtol(line + 11, nullptr, 10));
+        } else if (std::strncmp(line, "shm_ino=", 8) == 0) {
+            shm_ino = static_cast<uint64_t>(std::strtoull(line + 8, nullptr, 10));
         } else if (std::strncmp(line, "status=", 7) == 0) {
             status = std::string(line + 7);
         }
@@ -799,6 +862,19 @@ void read_gms_status(bool* out_gms_shm_ok, bool* out_gms_enabled, std::string* o
     std::fclose(fp);
 
     if (pid <= 0 || kill(static_cast<pid_t>(pid), 0) != 0) {
+        if (out_gms_diag) *out_gms_diag = "stale_pid";
+        return;
+    }
+
+    // Verify /proc/<pid> owner UID matches installed com.google.android.gms appId
+    int gms_app_id = resolve_installed_gms_app_id();
+    char proc_dir[64];
+    std::snprintf(proc_dir, sizeof(proc_dir), "/proc/%d", pid);
+    struct stat pst{};
+    if (gms_app_id < 10000 ||
+        stat(proc_dir, &pst) != 0 ||
+        (pst.st_uid % 100000u) != static_cast<uint32_t>(gms_app_id) ||
+        (reported_uid != 0 && reported_uid != static_cast<uint32_t>(pst.st_uid))) {
         if (out_gms_diag) *out_gms_diag = "stale_pid";
         return;
     }
@@ -827,8 +903,20 @@ void read_gms_status(bool* out_gms_shm_ok, bool* out_gms_enabled, std::string* o
         return;
     }
 
+    if (status.rfind("ok:", 0) != 0) {
+        if (out_gms_diag) *out_gms_diag = status;
+        return;
+    }
+
+    // Verify GMS is mapped to THIS daemon instance's memfd (not a dead/previous kuroko_daemon)
+    if (daemon_pid != static_cast<int32_t>(getpid()) ||
+        shm_ino == 0 || g_memfd_ino == 0 || shm_ino != g_memfd_ino) {
+        if (out_gms_diag) *out_gms_diag = "stale_daemon_restart";
+        return;
+    }
+
     if (out_gms_diag) *out_gms_diag = status;
-    if (out_gms_shm_ok) *out_gms_shm_ok = (status.rfind("ok:", 0) == 0);
+    if (out_gms_shm_ok) *out_gms_shm_ok = true;
 }
 
 /* ===== Localhost TCP Control Protocol (127.0.0.1:28765) ===== */
@@ -926,6 +1014,35 @@ bool decode_hex_bytes(const std::string& hex, uint8_t* out, size_t expected_len)
     return true;
 }
 
+size_t utf8_safe_prefix_len(const char* s, size_t len, size_t max_bytes) {
+    if (!s || len == 0 || max_bytes == 0) return 0;
+    size_t n = len < max_bytes ? len : max_bytes;
+    size_t back = 0;
+    while (back < n && back < 4u &&
+           (static_cast<unsigned char>(s[n - 1 - back]) & 0xC0u) == 0x80u) {
+        ++back;
+    }
+    if (back == n) return 0;
+    size_t lead_idx = n - 1 - back;
+    unsigned char lead = static_cast<unsigned char>(s[lead_idx]);
+    size_t expected = 1;
+    if ((lead & 0x80u) == 0x00u) {
+        expected = 1;
+    } else if ((lead & 0xE0u) == 0xC0u) {
+        expected = 2;
+    } else if ((lead & 0xF0u) == 0xE0u) {
+        expected = 3;
+    } else if ((lead & 0xF8u) == 0xF0u) {
+        expected = 4;
+    } else {
+        return lead_idx;
+    }
+    size_t have = n - lead_idx;
+    if (have < expected) return lead_idx;
+    if (have > expected) return lead_idx + expected;
+    return n;
+}
+
 bool decode_hex_str(const std::string& hex, std::string* out, size_t max_bytes) {
     out->clear();
     if (hex.empty()) return true;
@@ -943,6 +1060,7 @@ bool decode_hex_str(const std::string& hex, std::string* out, size_t max_bytes) 
             out->push_back(static_cast<char>((hi << 4) | lo));
         }
     }
+    out->resize(utf8_safe_prefix_len(out->data(), out->size(), max_bytes));
     return true;
 }
 
@@ -973,6 +1091,7 @@ bool decode_base64_str(const std::string& b64, std::string* out, size_t max_byte
             }
         }
     }
+    out->resize(utf8_safe_prefix_len(out->data(), out->size(), max_bytes));
     return true;
 }
 

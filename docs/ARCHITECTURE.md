@@ -208,7 +208,7 @@ flowchart LR
 
 - **Seqlock + 5 秒心跳熔断**：单写者奇数开始/偶数提交 + release 屏障，读者最多 8 次 acquire 重试并校验 `magic == 0x4F52554B`（`"KURO"`）、`version == 2` 与 `CLOCK_BOOTTIME - daemon_heartbeat_ns <= 5s`。
 - **只读 `g_memfd_ro` + 五域 SELinux 策略**：通过 `open("/proc/self/fd/<g_memfd>", O_RDONLY | O_CLOEXEC)` 获取只读句柄消除内核 `security_binder_transfer_file` 的 `{ write }` 拦截；`sepolicy.rule` 同时覆盖 `zygote`、`system_server`、`radio`、`bluetooth`（`u:r:bluetooth:s0`）与 `gmscore_app`（`u:r:gmscore_app:s0`，仅授予只读 `memfd` `fd use` + `tmpfs/su_tmpfs/magisk_tmpfs` `{ read getattr map }`，无任何写权限）五域。
-- **Zygisk Companion 三命令通道**：`cmd 1` 为 `system_server` 获取只读 `g_memfd_ro`；`cmd 2` 为 GMS 定位进程校验 `boot_guard` 与 `/data/adb/kuroko/gms_disabled` 后返回 `g_memfd_ro`（关闭时返回状态码 `3` 触发卸载）；`cmd 3` 原子写入 `0600` `/data/adb/kuroko/gms_status`（`pid=` / `status=`），由守护进程校验 `/proc/<pid>/cmdline` 存活并在 `STATUS` 上报。
+- **Zygisk Companion 三命令通道**：`cmd 1` 为 `system_server` 获取只读 `g_memfd_ro`；`cmd 2` 为 GMS 定位进程校验 `boot_guard`、`/data/adb/kuroko/gms_disabled` 及已安装 `com.google.android.gms` 的权威 `appId`（解析 `/data/system/packages.list` 与数据目录属主，UID 不匹配返回状态码 `4` 拒发 `memfd` 并立即 `DLCLOSE`），通过后返回 `g_memfd_ro` 与内核 `SO_PEERCRED` `daemon_pid` + `fstat` `shm_ino`；`cmd 3` 复验 GMS UID 后原子写入 `0600` `/data/adb/kuroko/gms_status`（`pid`/`uid`/`daemon_pid`/`shm_ino`/`status`），由守护进程校验进程存活、属主 UID、`/proc/<pid>/cmdline` 及当前实例 `(getpid(), g_memfd_ino)` 后在 `STATUS` 上报。
 - **Binder NDK 合法事务码、三段 `PING` 与仅 Root 蓝牙桥接**：
   - `KUROKO_BINDER_TX_SET_SHM = 0x004B5243`（`'KRC'`）、`KUROKO_BINDER_TX_PING = 0x004B5250`（`'KRP'`）、`KUROKO_BINDER_TX_GET_BT_BINDER = 0x004B5242`（`'KRB'`）、`KUROKO_ACK_OK = 0x4F4B`。
   - `ILocationManager` `PING` 回复保留 2 个 int（`mapped`, `sensorOk`）并在第 3 段 UTF-8 `byte[]`（`<= 256` 字节）前置拼入 `xp=13`，由守护进程 `parse_kv_int32` 提取 `g_xposed_code` (`xp`) 与 `g_zygisk_code` (`mv`)。
@@ -263,7 +263,7 @@ flowchart LR
     DAEMON -.->|"下次刷机/升级优先读取"| CUST
 ```
 
-1. **Android 资源分层（635 组严格对称键）**：
+1. **Android 资源分层（636 组严格对称键）**：
    - `values/strings.xml`（英文默认基准，含 `xposed_description`）与 `values/strings_modules.xml`（覆盖地图/地理编码/路线/预设/点位/目标应用/帮助/悬浮窗/通知栏/诊断/更新检查/全球射频配置）与 `values-zh/` 100% 键集与位置占位符（`%1$s` / `%2$d` / `%%`）对称，并由 `scripts/audit_i18n.py` 在本地与 CI 自动校验。
    - `res/xml/locales_config.xml` 声明 Android 13+ 原生系统 Per-App Language 列表；`RouteStore` 通过 `CustomSpeedPreset.builtInKey`（`walk`/`jog`/`run`/`sprint`）本地化渲染内置预设名；`GeocoderClient` 使用 `KurokoTeleport/<version>` User-Agent 并动态按当前 BCP-47 构造 Nominatim `accept-language`。
 2. **注册表驱动 `AppLocaleManager.kt`**：
@@ -334,7 +334,7 @@ flowchart TD
      - 入站拦截 `com.google.android.gms.location.internal.IGoogleLocationManagerService`，经内核态 `IPCThreadState::getCallingUid()` 与 `Parcel::objects()` 内嵌 `flat_binder_object`（`BINDER_TYPE_HANDLE` -> `ProcessState::getStrongProxyForHandle`）建立 `BpBinder* -> calling_uid` 映射（不依赖任何 GMS 混淆类名与硬编码 `Parcel` 偏移）。
      - 出站按目标 UID 拦截 `ILocationCallback`（`onLocationResult` + `onLocationAvailability`）、`ILocationListener`（`onLocationChanged`）与 `ILocationStatusCallback`（`onResult(Status, Location)`，覆盖 `getLastLocation` / `getCurrentLocation`），经 JNI 构造真实 `android.location.Location("fused")`（`isMock=false`）并按标准 GMS `SafeParcelWriter` 帧封装后经原 `BpBinder::transact` 派发；非目标 UID 在 `< 50ns` 内原样直通，零污染 GMS 内部缓存、CHRE、Find My Device 与其他客户端。
      - 内建轻量化 **`Kuroko-1Hz-GMS`** 室内主动推包线程（850ms 去重、`TF_ONE_WAY` 派发、`DEAD_OBJECT` 自动清理、`thread_local g_in_gms_pump` 防重入）。
-   - **存活校验与可选遥测**：`postAppSpecialize` 经 Companion `cmd 3` 原子写入 `/data/adb/kuroko/gms_status`（`0600`），守护进程验证 `kill(pid, 0) == 0` 且 `/proc/<pid>/cmdline` 以 `com.google.android.gms` 开头并在 `STATUS` 输出 `gms_shm` / `gms_enabled` / `gms_diag`（`post-fs-data.sh` 在 `zygote` 启动前同步清理过期 `gms_status`，消除与 GMS 启动竞态，且绝不删除 `gms_disabled`）。
+   - **身份核验、实例绑定与可选遥测**：`preAppSpecialize` 先做 `args->uid >= 10000` 与 `app_data_dir` 后缀门禁，再经 Companion `cmd 2` 核验已安装 `com.google.android.gms` `appId` 后才映射 `g_memfd_ro` 并单线程安装虚表钩子，随后在 Zygote 上下文中经 `cmd 3` 原子写入含 `pid` / `uid` / `daemon_pid` / `shm_ino` / `status` 的 `/data/adb/kuroko/gms_status`（`0600`），`postAppSpecialize` 再启动 `Kuroko-1Hz-GMS`；守护进程验证进程存活、`/proc/<pid>` 属主 UID、`/proc/<pid>/cmdline` 精确匹配及 `daemon_pid == getpid() && shm_ino == g_memfd_ino`（守护进程重启后旧映射立即报 `gms_shm=false` / `stale_daemon_restart`），`post-fs-data.sh` 在 `zygote` 启动前同步清理过期 `gms_status` 且保留 `gms_disabled`。
 3. **显式已知边界（`v0.7.0`）**：
    - **Zygisk Next 排除列表（DenyList）**：若用户在 Zygisk Next DenyList 中强制对 `com.google.android.gms` / `com.google.android.gms.persistent` 启用屏蔽（阻止 Zygisk 模块加载），Layer 2 将不会注入，系统自动优雅回退至 Layer 1（`WorkSource`）。
    - **后台地理围栏覆盖范围**：前台/回调型 `FusedLocationProviderClient`（`requestLocationUpdates`、`getLastLocation`、`getCurrentLocation`、`LocationAvailability`）已完整覆盖；基于 `PendingIntent` 的后台地理围栏（Geofencing）在 `v0.7.0` 暂未拦截，已规划为后续迭代项。

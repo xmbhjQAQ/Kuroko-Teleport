@@ -199,10 +199,44 @@ echo "===GMS_STATUS==="
 [ -f /data/adb/kuroko/gms_disabled ] && echo "gms_disabled=1" || echo "gms_disabled=0"
 cat /data/adb/kuroko/gms_status 2>/dev/null || true
 echo "===GMS_PROCS==="
-ps -AZ 2>/dev/null | grep "com\.google\.android\.gms" | while read -r ctx rest; do
-  proc="${'$'}{rest##* }"
-  [ -n "${'$'}ctx" ] && [ -n "${'$'}proc" ] && echo "${'$'}ctx ${'$'}proc"
-done | head -n 8 || true
+GMS_APP_ID=""
+if [ -r /data/system/packages.list ]; then
+  GMS_APP_ID=$(awk '${'$'}1=="com.google.android.gms"{print ${'$'}2; exit}' /data/system/packages.list 2>/dev/null)
+  if [ -z "${'$'}GMS_APP_ID" ]; then
+    while read -r p_pkg p_uid _rest; do
+      if [ "${'$'}p_pkg" = "com.google.android.gms" ]; then
+        GMS_APP_ID="${'$'}p_uid"
+        break
+      fi
+    done < /data/system/packages.list 2>/dev/null
+  fi
+fi
+if [ -z "${'$'}GMS_APP_ID" ] && [ -d /data/user/0/com.google.android.gms ]; then
+  GMS_APP_ID=$(stat -c %u /data/user/0/com.google.android.gms 2>/dev/null)
+fi
+if [ -z "${'$'}GMS_APP_ID" ] && [ -d /data/data/com.google.android.gms ]; then
+  GMS_APP_ID=$(stat -c %u /data/data/com.google.android.gms 2>/dev/null)
+fi
+case "${'$'}GMS_APP_ID" in
+  ''|*[!0-9]*) GMS_APP_ID="" ;;
+  *) GMS_APP_ID=$((GMS_APP_ID % 100000)) ;;
+esac
+if [ -n "${'$'}GMS_APP_ID" ] && [ "${'$'}GMS_APP_ID" -ge 10000 ]; then
+  for pdir in /proc/[0-9]*; do
+    [ -r "${'$'}pdir/cmdline" ] || continue
+    p_uid=$(stat -c %u "${'$'}pdir" 2>/dev/null) || continue
+    case "${'$'}p_uid" in ''|*[!0-9]*) continue ;; esac
+    [ $((p_uid % 100000)) -eq "${'$'}GMS_APP_ID" ] || continue
+    p_name=$(tr '\0' ' ' < "${'$'}pdir/cmdline" 2>/dev/null | sed 's/ .*//')
+    case "${'$'}p_name" in
+      com.google.android.gms|com.google.android.gms.*)
+        p_ctx=$(tr -d '\0\r\n' < "${'$'}pdir/attr/current" 2>/dev/null)
+        [ -n "${'$'}p_ctx" ] || p_ctx="u:r:unknown:s0"
+        echo "${'$'}p_ctx ${'$'}p_name"
+        ;;
+    esac
+  done | head -n 8 || true
+fi
 echo "===SENSOR_MAPS==="
 set -- $(pidof system_server 2>/dev/null)
 SS_PID="${'$'}1"
@@ -555,7 +589,7 @@ echo "===END==="
         val gmsEnabledEffective = if (connected) st.gmsEnabled else !snapshot.gmsDisabledFile
         val gmsShmEffective = connected && st.gmsShm
         val gmsDiagEffective = st.gmsDiag.ifBlank { snapshot.gmsStatusFile }
-        val gmsRunning = snapshot.gmsProcesses.any { it.contains("com.google.android.gms") }
+        val gmsHostRunning = snapshot.gmsProcesses.any { isGmsFlpHostProcess(it) }
         val gmsCheck = when {
             !gmsEnabledEffective -> HealthCheckItem(
                 id = "gms",
@@ -569,7 +603,13 @@ echo "===END==="
                 status = HealthStatus.PASS,
                 detail = ctx.getString(R.string.diag_check_gms_ok, gmsDiagEffective.ifBlank { "G✓" })
             )
-            !gmsRunning -> HealthCheckItem(
+            gmsDiagEffective.equals("stale_daemon_restart", ignoreCase = true) -> HealthCheckItem(
+                id = "gms",
+                title = ctx.getString(R.string.diag_check_gms_title),
+                status = HealthStatus.WARN,
+                detail = ctx.getString(R.string.diag_check_gms_warn, "stale_daemon_restart")
+            )
+            !gmsHostRunning -> HealthCheckItem(
                 id = "gms",
                 title = ctx.getString(R.string.diag_check_gms_title),
                 status = HealthStatus.PASS,
@@ -1164,6 +1204,11 @@ echo "===END==="
         return effectiveInstances to vmaCount
     }
 
+    internal fun isGmsFlpHostProcess(entry: String): Boolean {
+        val proc = entry.trim().substringAfterLast(' ')
+        return proc == "com.google.android.gms" || proc == "com.google.android.gms.persistent"
+    }
+
     internal fun sanitizeGmsProcs(raw: String): List<String> {
         if (raw.isBlank()) return emptyList()
         return raw.lineSequence()
@@ -1174,7 +1219,9 @@ echo "===END==="
                 if (parts.size < 2) return@mapNotNull null
                 val domain = parts.first()
                 val proc = parts.last()
-                if (!domain.startsWith("u:r:") || !proc.startsWith("com.google.android.gms")) {
+                val validGmsName = proc == "com.google.android.gms" ||
+                    proc.startsWith("com.google.android.gms.")
+                if (!domain.startsWith("u:r:") || !validGmsName) {
                     return@mapNotNull null
                 }
                 "$domain $proc"
