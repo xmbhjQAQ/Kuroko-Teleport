@@ -415,7 +415,8 @@
     <string name="diag_check_bt_missing">Target app(s) enabled BLE policy, but B- is inactive. Enable Bluetooth (com.android.bluetooth) in LSPosed and reboot.</string>
     <string name="diag_check_gms_title">GMS Fused Location Hook (Optional)</string>
     <string name="diag_check_gms_ok">GMS FLP active (%1$s)</string>
-    <string name="diag_check_gms_disabled">Disabled in RF settings (zero footprint in GMS)</string>
+    <string name="diag_check_gms_disabled">Disabled in RF settings (confirmed zero footprint in GMS)</string>
+    <string name="diag_check_gms_disabled_pending">Disabled in RF settings (pending GMS or device restart — hook still resident in old GMS process)</string>
     <string name="diag_check_gms_not_installed">Google Play Services not running (optional — skipped)</string>
     <string name="diag_check_gms_warn">GMS running but hook inactive (%1$s). Ensure Zygisk Next DenyList does not block com.google.android.gms / .persistent.</string>
     <string name="diag_summary_gms">GMS FLP: %1$s (%2$s)</string>

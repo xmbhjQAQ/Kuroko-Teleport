@@ -11,6 +11,7 @@ MSG_APK_SIG_WARN_2='! 已完整保留原有 App 与全部收藏路线/设置（�
 MSG_APK_SIG_WARN_3='! 请先备份路线后手动安装匹配签名的同版本 APK。'
 MSG_APK_DEFERRED_1='- 当前包管理服务暂不可用（%s）'
 MSG_APK_DEFERRED_2='- 已将 APK 暂存至 %s，开机后将由 service.sh 自动补装并清理'
+MSG_APK_STAGE_FAIL='! 警告：暂存 APK 至 %s 失败；已保留原始安装包在 %s，请检查存储空间后手动安装'
 MSG_READY='- 原生组件已就绪：bin/kuroko_daemon 与 zygisk/arm64-v8a.so（%s）'
 MSG_LSPOSED_HINT='- 请在 LSPosed 中仅勾选：系统框架 (android)、电话服务 (com.android.phone)，如需 BLE 仿真可额外勾选蓝牙 (com.android.bluetooth)'
 MSG_BOOTGUARD_HINT='- 防卡开机守护已启用（连续 2 次未完成启动将自动停用钩子）'

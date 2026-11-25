@@ -226,12 +226,12 @@ flowchart LR
 | 命令 | 参数格式 | 功能 |
 | :--- | :--- | :--- |
 | `PING` | 无 | 存活探活（返回 `OK PONG`） |
-| `STATUS` | 无 | 返回扩展 JSON（坐标/速度/步态/目标/各路 SHM 含 `bt_shm`/`gms_shm`/`gms_enabled`/`gms_diag`/`sensor_diag` + 四端版本/协议字段 + `rf_country`/`rf_mcc`/`rf_mnc`/`rf_cells`/`rf_wifis`/`rf_bles`/`rf_serving`） |
+| `STATUS` | 无 | 返回扩展 JSON（坐标/速度/步态/目标/增量 `daemon_pid` 用于检测守护进程快速重启并自动重同步目标与射频配置/各路 SHM 含 `bt_shm`/`gms_shm`/`gms_enabled`/`gms_diag`（区分 `disabled_pending_restart` 与 `disabled`）/`sensor_diag` + 四端版本/协议字段 + `rf_country`/`rf_mcc`/`rf_mnc`/`rf_cells`/`rf_wifis`/`rf_bles`/`rf_serving`） |
 | `START` / `HOLD` / `STOP` | 无 | 启动运动 / 原地驻留（配合显式非静止 `mode` 可原地发步） / 停止恢复真机 |
 | `RESET_STEPS` | 无 | 仅重置 `virtual_steps`（`virtual_steps_` / `last_step_boot_ns_`），绝不干扰当前路线进度、坐标、累计里程与圈数（Native 注入端保持 `emitted_steps` 单调递增） |
 | `RESET_ROUTE` | 无 | 重置路线进度、累计里程与圈数并回位至路线起点，不归零 `virtual_steps` |
-| `SET_POINT` | `<lat> <lon> [alt]` | 设置单点静止虚拟坐标（WGS-84，重置 `max_laps=0`） |
-| `SET_ROUTE` | 4 参：`<loop 0\|1> <max_dist_m> <max_laps 0\|N> <lat,lon,alt;...>`<br>（兼容 3 参） | 下发路线航点序列、循环标志、目标里程与重复圈数上限 |
+| `SET_POINT` | `<lat> <lon> [alt]` | 设置单点静止虚拟坐标（严格校验有限 WGS-84 范围 `[-90, 90]` / `[-180, 180]`，非法参数返回 `ERR INVALID_COORDS` 且不修改既有状态；重置 `max_laps=0`） |
+| `SET_ROUTE` | 4 参：`<loop 0\|1> <max_dist_m> <max_laps 0\|N> <lat,lon,alt;...>`<br>（兼容 3 参） | 下发路线航点序列、循环标志、目标里程与重复圈数上限；严格校验 WGS-84 范围、对跨越 `±180°` 国际日期变更线的航段执行经度展开，并原子拒绝空路线/非法坐标/零长度路线（`ERR EMPTY_ROUTE` / `ERR INVALID_COORDS` / `ERR ZERO_LENGTH_ROUTE`），失败绝不修改既有引擎状态 |
 | `SET_SPEED` | `<speed_mps>` | 设置目标平均速度（`0.0 ~ 30.0 m/s`） |
 | `SET_PACE_VAR` | `<ratio>` | 设置双时间尺度跑步配速波动系数（`0.0 ~ 0.25`，默认 `0.08`） |
 | `SET_MODE` | `<motion_mode 0..5> [carry_mode 0\|1]` | 设置步态模式与携带姿态（手持摆臂/裤兜） |
@@ -242,7 +242,7 @@ flowchart LR
 | `SET_RF_CELLS` | `NONE` 或 `<rat:mcc:mnc:digits:tac:ci:pci:arfcn:band:rsrp:pin_lat:pin_lon;...>` | **`v0.7.0` 新增**：下发最多 4 个用户固定基站（`pin_lat=999` 表示始终跟随当前位置） |
 | `SET_RF_WIFIS` | `NONE` 或 `<bssid12:freq:rssi:flags:pin_lat:pin_lon:ssid_hex;...>` | **`v0.7.0` 新增**：下发最多 8 个用户固定 Wi-Fi 热点（`ssid_hex` 为 UTF-8 十六进制编码，`flags bit0=connected_ap`，`pin_lat=999` 始终跟随） |
 | `SET_RF_BEACONS` | `NONE` 或 `<mac12:dev_type:uuid32:major:minor:tx_pwr:pin_lat:pin_lon:name_hex;...>` | **`v0.7.0` 新增**：下发最多 8 个用户固定 BLE / iBeacon（`dev_type=1` 自动封装 30B Apple `0x004C` AD 报文，`pin_lat=999` 始终跟随） |
-| `SET_GMS` | `<0\|1>` | **`v0.7.0` 新增**：`0` 原子创建 `/data/adb/kuroko/gms_disabled`（`0600`）并清理 `gms_status` 实现 GMS 零驻留（返回 `OK GMS_DISABLED`）；`1` 删除该标记重新启用（返回 `OK GMS_ENABLED`） |
+| `SET_GMS` | `<0\|1>` | **`v0.7.0` 新增**：`0` 原子创建 `/data/adb/kuroko/gms_disabled`（`0600`）并**保留** `gms_status` 以便 `STATUS` 与诊断中心区分“待重启生效（`disabled_pending_restart`）”与“已确认零驻留（`disabled`）”（返回 `OK GMS_DISABLED`）；`1` 删除该标记重新启用（返回 `OK GMS_ENABLED`） |
 
 ---
 
@@ -264,8 +264,8 @@ flowchart LR
     DAEMON -.->|"下次刷机/升级优先读取"| CUST
 ```
 
-1. **Android 资源分层（636 组严格对称键）**：
-   - `values/strings.xml`（英文默认基准，含 `xposed_description`）与 `values/strings_modules.xml`（覆盖地图/地理编码/路线/预设/点位/目标应用/帮助/悬浮窗/通知栏/诊断/更新检查/全球射频配置）与 `values-zh/` 100% 键集与位置占位符（`%1$s` / `%2$d` / `%%`）对称，并由 `scripts/audit_i18n.py` 在本地与 CI 自动校验。
+1. **Android 资源分层（637 组严格对称键）**：
+   - `values/strings.xml`（248 键，英文默认基准，含 `xposed_description`）与 `values/strings_modules.xml`（389 键，覆盖地图/地理编码/路线/预设/点位/目标应用/帮助/悬浮窗/通知栏/诊断/更新检查/全球射频配置）与 `values-zh/` 100% 键集与位置占位符（`%1$s` / `%2$d` / `%%`）对称，并由 `scripts/audit_i18n.py` 在本地与 CI 自动校验。
    - `res/xml/locales_config.xml` 声明 Android 13+ 原生系统 Per-App Language 列表；`RouteStore` 通过 `CustomSpeedPreset.builtInKey`（`walk`/`jog`/`run`/`sprint`）本地化渲染内置预设名；`GeocoderClient` 使用 `KurokoTeleport/<version>` User-Agent 并动态按当前 BCP-47 构造 Nominatim `accept-language`。
 2. **注册表驱动 `AppLocaleManager.kt`**：
    - 维护单一声明列表 `SUPPORTED_LANGUAGES: List<SupportedLanguage>`，所有具体语种采用**母语自称（Endonym）**，确保用户永不会因误切陌生语种而迷路。
@@ -276,7 +276,7 @@ flowchart LR
 4. **如何新增语言（3 步扩展规范）**：
    - **步骤 1**：新增 `app/src/main/res/values-<android_bcp47>/strings.xml` 与 `strings_modules.xml`（与基准英文全量键与占位符对齐）。
    - **步骤 2**：在 `app/src/main/res/xml/locales_config.xml` 追加 `<locale android:name="<tag>" />`，并在 `AppLocaleManager.kt` 的 `SUPPORTED_LANGUAGES` 追加 `SupportedLanguage("<tag>", "<母语自称>")`。
-   - **步骤 3（可选）**：在 `module_template/lang/` 放入 `<tag>.sh`（对齐 `en.sh` 16 个变量、严格 LF 换行），运行 `python scripts/audit_i18n.py`、`gradlew :app:assembleDebug` 与 `python build_module.py` 即可零代码修改全链路生效。
+   - **步骤 3（可选）**：在 `module_template/lang/` 放入 `<tag>.sh`（对齐 `en.sh` 17 个变量、严格 LF 换行），运行 `python scripts/audit_i18n.py`、`gradlew :app:assembleDebug` 与 `python build_module.py` 即可零代码修改全链路生效。
 
 ---
 
@@ -335,7 +335,7 @@ flowchart TD
      - 入站拦截 `com.google.android.gms.location.internal.IGoogleLocationManagerService`，经内核态 `IPCThreadState::getCallingUid()` 与 `Parcel::objects()` 内嵌 `flat_binder_object`（`BINDER_TYPE_HANDLE` -> `ProcessState::getStrongProxyForHandle`）建立 `BpBinder* -> calling_uid` 映射（不依赖任何 GMS 混淆类名与硬编码 `Parcel` 偏移）。
      - 出站按目标 UID 拦截 `ILocationCallback`（`onLocationResult` + `onLocationAvailability`）、`ILocationListener`（`onLocationChanged`）与 `ILocationStatusCallback`（`onResult(Status, Location)`，覆盖 `getLastLocation` / `getCurrentLocation`），经 JNI 构造真实 `android.location.Location("fused")`（`isMock=false`）并按标准 GMS `SafeParcelWriter` 帧封装后经原 `BpBinder::transact` 派发；非目标 UID 在 `< 50ns` 内原样直通，零污染 GMS 内部缓存、CHRE、Find My Device 与其他客户端。
      - 内建轻量化 **`Kuroko-1Hz-GMS`** 室内主动推包线程（850ms 去重、`TF_ONE_WAY` 派发、`DEAD_OBJECT` 自动清理、`thread_local g_in_gms_pump` 防重入）。
-   - **身份核验、实例绑定与可选遥测**：`preAppSpecialize` 先做 `args->uid >= 10000` 与 `app_data_dir` 后缀门禁，再经 Companion `cmd 2` 核验已安装 `com.google.android.gms` `appId` 后才映射 `g_memfd_ro` 并单线程安装虚表钩子，随后在 Zygote 上下文中经 `cmd 3` 原子写入含 `pid` / `uid` / `daemon_pid` / `shm_ino` / `status` 的 `/data/adb/kuroko/gms_status`（`0600`），`postAppSpecialize` 再启动 `Kuroko-1Hz-GMS`；守护进程验证进程存活、`/proc/<pid>` 属主 UID、`/proc/<pid>/cmdline` 精确匹配及 `daemon_pid == getpid() && shm_ino == g_memfd_ino`（守护进程重启后旧映射立即报 `gms_shm=false` / `stale_daemon_restart`），`post-fs-data.sh` 在 `zygote` 启动前同步清理过期 `gms_status` 且保留 `gms_disabled`。
+   - **身份核验、实例绑定与可选遥测**：`preAppSpecialize` 先做 `args->uid >= 10000` 与 `app_data_dir` 后缀门禁，再经 Companion `cmd 2` 核验已安装 `com.google.android.gms` `appId` 后才映射 `g_memfd_ro` 并单线程安装虚表钩子，随后在 Zygote 上下文中经 `cmd 3` 原子写入含 `pid` / `uid` / `daemon_pid` / `shm_ino` / `status` 的 `/data/adb/kuroko/gms_status`（`0600`），`postAppSpecialize` 再启动 `Kuroko-1Hz-GMS`；守护进程验证进程存活、`/proc/<pid>` 属主 UID、`/proc/<pid>/cmdline` 精确匹配及 `daemon_pid == getpid() && shm_ino == g_memfd_ino`（守护进程重启后旧映射立即报 `gms_shm=false` / `stale_daemon_restart`）；执行 `SET_GMS 0` 时刻意保留 `gms_status`，若原挂钩的 GMS 进程尚未退出则持续回报 `gms_shm=false` / `gms_diag="disabled_pending_restart"`，待 GMS 退出或重启后才转为确认零驻留的 `disabled`；`post-fs-data.sh` 在 `zygote` 启动前同步清理过期 `gms_status` 且保留 `gms_disabled`。
 3. **显式已知边界（`v0.7.0`）**：
    - **Zygisk Next 排除列表（DenyList）**：若用户在 Zygisk Next DenyList 中强制对 `com.google.android.gms` / `com.google.android.gms.persistent` 启用屏蔽（阻止 Zygisk 模块加载），Layer 2 将不会注入，系统自动优雅回退至 Layer 1（`WorkSource`）。
    - **后台地理围栏覆盖范围**：前台/回调型 `FusedLocationProviderClient`（`requestLocationUpdates`、`getLastLocation`、`getCurrentLocation`、`LocationAvailability`）已完整覆盖；基于 `PendingIntent` 的后台地理围栏（Geofencing）在 `v0.7.0` 暂未拦截，已规划为后续迭代项。
@@ -354,7 +354,7 @@ flowchart TD
 
 对应源码：`native/daemon/sim_engine.cpp`、`native/daemon/nmea_gnss.cpp`、`native/daemon/rf_synth.{h,cpp}`
 
-1. **Catmull-Rom 样条、弯道减速与双尺度配速**：每段约 $3\text{ m}$ 密采样（$\text{clamp}(\lceil d / 3.0 \rceil, 4, 40)$），支持闭合循环、目标里程与 `max_laps`；弯道减速 $c_f = 1 - \text{clamp}(\Delta\psi / 120^\circ, 0, 0.30)$；双尺度 OU 配速波动（中期 $\tau=18\text{s}$ $\sigma=0.75r$ + 短期 $\tau=4\text{s}$ $\sigma=0.35r$，限幅 $[\max(0.65, 1-1.6r), 1+1.6r]$）经 $\tau_a=1.2\text{s}$ 惯性平滑。
+1. **Catmull-Rom 样条、跨日期变更线展开、弯道减速与双尺度配速**：`SET_POINT`/`SET_ROUTE` 严格校验有限 WGS-84 范围（`[-90, 90]` / `[-180, 180]`），对跨越 `±180°` 的航段执行经度展开与归一化并原子拒绝零长度路线（失败不修改既有状态）；每段约 $3\text{ m}$ 密采样（$\text{clamp}(\lceil d / 3.0 \rceil, 4, 40)$），支持闭合循环、目标里程与 `max_laps`；弯道减速 $c_f = 1 - \text{clamp}(\Delta\psi / 120^\circ, 0, 0.30)$；双尺度 OU 配速波动（中期 $\tau=18\text{s}$ $\sigma=0.75r$ + 短期 $\tau=4\text{s}$ $\sigma=0.35r$，限幅 $[\max(0.65, 1-1.6r), 1+1.6r]$）经 $\tau_a=1.2\text{s}$ 惯性平滑。
 2. **OU 有色噪声 GPS 漂移**：局部 ENU 平面 $\tau_{\text{gps}} = 9\text{s}$ 离散 OU 过程（垂直系数 `0.65`，叠加 $0.14\,\sigma$ 高频噪声），水平精度 `h_accuracy_m` 在 $3.0 \sim 18.0\text{ m}$ 相关呼吸波动（$\tau = 10\text{s}$）。
 3. **同源单相位生物力学 5 路 IMU 与偶极子地磁模型**：$L(v)=\text{clamp}(0.48+0.19v, 0.62, 1.95)\text{ m}$，$f=\text{clamp}((v/L)\eta, 1.25, 3.85)\text{ Hz}$（步间 $\pm 4.5\%$ 节拍微扰展宽 FFT 主峰）；非对称足跟着地多谐波 + 高斯冲激 + 侧向**半频 $f/2$** 左右摆动；手持 (`0.55 rad`)/裤兜 (`1.38 rad`) + $\tau=4\text{s}$ 漂移四元数 $q(t)$，解析求导得陀螺仪 $\vec{\omega}(t)$，投影严格满足 $\vec{a}_{\text{accel}} \equiv \vec{g}_{\text{body}} + \vec{a}_{\text{linear}}$，气压计随海拔同步耦合；世界系地磁矢量升级为**纬度感知偶极子模型**（$B_n = 31\cos\phi\;\mu\text{T},\;B_u = -62\sin\phi\;\mu\text{T}$），确保南北半球磁倾角与磁力计读数物理自洽。
 4. **1Hz 多星座 GNSS 与 NMEA-0183**：18 颗真实星座卫星（6 GPS + 6 北斗 + 3 Galileo + 3 GLONASS，15 颗 `USED_IN_FIX`），方位角慢漂移 + $C/N_0$ OU 过程（$\tau=12\text{s}$），同步生成带合法 XOR 校验和的 `$GNGGA`/`$GNRMC`/`$GNGSA`/`$GPGSV`。
@@ -370,12 +370,12 @@ flowchart TD
 
 1. **零常驻开销的 5 源按需采集（`DiagnosticCollector.kt` & `AppLogBuffer.kt`）**：
    - 不起常驻后台 `logcat` 监听进程；在应用进程内维护线程安全的 400 条循环事件缓冲 `AppLogBuffer`（仅记录连接/启停/版本锁/自检/换语等非敏感状态，绝不记录鉴权令牌或经纬度）。
-   - 用户打开诊断中心时，单次执行有界只读 `su -c` 快照（6 秒超时、1 MiB 非阻塞读取上限），汇总 5 类排障数据：① 模块 `module.prop`/`disable`/`boot_guard`/`lang`/`apk_installed.prop`/`gms_status`/`gms_disabled`、守护进程端口状态及仅含进程名与 SELinux 域的 GMS 存活探测（不暴露 PID/UID）；② `/data/adb/kuroko/daemon.log` 尾 128 KB；③ 两阶段 `logcat`（阶段 A 全环形缓冲专抓 `KurokoDaemon`/`KurokoZygisk`/`KurokoSensorHook`/`KurokoGmsHook` 尾 300 行 + 阶段 B 近期 4000 行中的崩溃、本包 `W`/`E`/`F` 及经 `isEngineRelevantAvc` 精准筛选的引擎相关 SELinux AVC，覆盖 `bluetooth` 与 `gmscore_app` 域并自动剥离 `untrusted_app`/`proc_perfmgr` 与 OEM UI 调度噪音）；④ 严格白名单过滤的 LSPosed `modules_*.log`/`verbose_*.log`（仅保留 `[com.kuroko.teleport,` 与非外来模块头的 `Kuroko-*` 行，严防跨模块日志泄漏，并在离线时自动提取 `kuroko.sensor.hook` 回退信息）；⑤ 解析精确 ELF 实例数与 VMA 总数的 `system_server` `libsensorservice.so` 映射（`r--p` 且 `offset=0`）及安全 `Build` 元数据。
+   - 用户打开诊断中心时，单次执行有界只读 `su -c` 快照（6 秒超时、1 MiB 非阻塞读取上限），汇总 5 类排障数据：① 模块 `module.prop`/`disable`/`boot_guard`/`lang`/`apk_installed.prop`/`gms_status`（导出前强制剥离 `pid`/`uid`/`daemon_pid`/`shm_ino`）/`gms_disabled`、守护进程端口状态及仅含进程名、SELinux 域与纯布尔驻留状态（`hook_pid_alive`）的 GMS 存活探测（不暴露 PID/UID）；② `/data/adb/kuroko/daemon.log` 尾 128 KB；③ 两阶段 `logcat`（阶段 A 全环形缓冲专抓 `KurokoDaemon`/`KurokoZygisk`/`KurokoSensorHook`/`KurokoGmsHook` 尾 300 行 + 阶段 B 近期 4000 行中的崩溃、本包 `W`/`E`/`F` 及经 `isEngineRelevantAvc` 精准筛选的引擎相关 SELinux AVC，覆盖 `bluetooth` 与 `gmscore_app` 域并自动剥离 `untrusted_app`/`proc_perfmgr` 与 OEM UI 调度噪音）；④ 严格白名单过滤的 LSPosed `modules_*.log`/`verbose_*.log`（仅保留 `[com.kuroko.teleport,` 与非外来模块头的 `Kuroko-*` 行，严防跨模块日志泄漏，并在离线时自动提取 `kuroko.sensor.hook` 回退信息）；⑤ 解析精确 ELF 实例数与 VMA 总数的 `system_server` `libsensorservice.so` 映射（`r--p` 且 `offset=0`）及安全 `Build` 元数据。
 2. **强制隐私脱敏引擎与零新增敏感权限**：
    - 采集器**永不读取 `/data/adb/kuroko/token`**，永不采集设备序列号/IMEI/Android ID/MAC/SSID，永不导出收藏路线、点位或无关应用/Xposed 模块日志（在 Kotlin 侧对 `logcat` 与 LSPosed 日志实施二次白名单校验）。
    - 所有界面展示、剪贴板摘要与导出文件均强制经过统一脱敏管道：精确剥离地图 API Key 与可选 OpenCelliD Token（`<REDACTED_KEY>`）、`AUTH`/`token=`（`<REDACTED>`）、`SET_POINT`/`SET_ROUTE`/`SET_RF_*` 坐标、NMEA 与十进制坐标（`<REDACTED_COORD>`）、MAC（`<REDACTED_MAC>`）及邮箱（`<REDACTED_EMAIL>`）；默认开启确定性目标应用包名匿名化（`target_1`、`target_2`…）。
 3. **7 项本地自动体检与作用域安全导出（`DiagnosticsDialog.kt`）**：
-   - 本地 `evaluateHealth` 引擎自动诊断 **Root 与守护进程 / 四端版本一致性 / LSPosed 系统钩子 (L/P) / Zygisk 传感器钩子 (S，解析 `mp=`/`c=`/`d=` 区分多映射与 Android ABI 未适配) / 可选蓝牙钩子 (B，仅在目标开启 BLE 策略但 `btShm=false` 时给出非阻塞提示) / 可选 GMS 融合定位钩子 (G，已关闭、已就绪或设备未运行 GMS 均判定正常绝不误报无 GMS 机型；GMS 运行且开启但未激活时提示检查 Zygisk Next DenyList) / SELinux AVC**，给出精确修复指引。
+   - 本地 `evaluateHealth` 引擎自动诊断 **Root 与守护进程 / 四端版本一致性 / LSPosed 系统钩子 (L/P) / Zygisk 传感器钩子 (S，解析 `mp=`/`c=`/`d=` 区分多映射与 Android ABI 未适配) / 可选蓝牙钩子 (B，仅在目标开启 BLE 策略但 `btShm=false` 时给出非阻塞提示) / 可选 GMS 融合定位钩子 (G，已就绪、无 GMS 机型或已关闭且确认零驻留 `disabled` 均判定 `PASS` 绝不误报；若已关闭但原挂钩 GMS 进程仍存活报 `disabled_pending_restart` / `hook_pid_alive` 则输出 `WARN` 提示重启生效；GMS 运行且开启但未激活时提示检查 Zygisk Next DenyList) / SELinux AVC**，给出精确修复指引。
    - 支持一键复制脱敏 Markdown 摘要（含 `btShm`、`gmsShm`/`gmsDiag` 与 `rf_*` 遥测，对接 `.github/ISSUE_TEMPLATE/bug_report.yml`）、通过仅开放 `cache/diagnostics/` 的作用域 `FileProvider`（`com.kuroko.teleport.fileprovider`，`exported=false`，`FLAG_GRANT_READ_URI_PERMISSION`，自动清理超过 24 小时旧缓存）分享 6 文件诊断包（`summary.md`、`daemon.log`、`lsposed_kuroko.log`、`system_logcat.log`、`app_events.log`、`runtime_state.json`），或经由 SAF `CreateDocument("application/zip")` 本地保存。
 4. **守护进程日志 256 KB 原子轮转（`native/daemon/main.cpp`）**：
    - `rotate_daemon_log_if_needed_locked()` 在 `g_log_mu` 互斥锁保护下检测到 `/data/adb/kuroko/daemon.log` 超过 `262144 B`（256 KB）时，截取对齐换行符的尾部 `131072 B`（128 KB）写入 `O_CLOEXEC` / `fchmod(0600)` 的 `/data/adb/kuroko/daemon.log.tmp`，校验成功后原子 `rename()` 覆盖原文件（失败自动清理 `.tmp`），确保长期后台运行不致磁盘膨胀。

@@ -220,18 +220,35 @@ if [ -f "$APK_FILE" ]; then
         ui_print "$MSG_APK_SIG_WARN_3"
     else
         # PMS offline/busy (e.g. recovery flash): stage to /data/adb/kuroko/pending_apk for post-boot install
+        STAGE_OK=1
         rm -rf "$PENDING_DIR"
-        mkdir -p "$PENDING_DIR"
-        chmod 0700 "$PENDING_DIR"
-        cp -f "$APK_FILE" "$PENDING_DIR/kuroko.apk"
-        chmod 0600 "$PENDING_DIR/kuroko.apk"
-        if [ -f "$META_FILE" ]; then
-            cp -f "$META_FILE" "$PENDING_DIR/apk_meta.prop"
-            chmod 0600 "$PENDING_DIR/apk_meta.prop"
+        if ! mkdir -p "$PENDING_DIR" || ! chmod 0700 "$PENDING_DIR"; then
+            STAGE_OK=0
         fi
-        rm -rf "$APK_DIR"
-        ui_print "$(printf -- "$MSG_APK_DEFERRED_1" "$PM_OUT")"
-        ui_print "$(printf -- "$MSG_APK_DEFERRED_2" "$PENDING_DIR")"
+        if [ "$STAGE_OK" -eq 1 ]; then
+            if ! cp -f "$APK_FILE" "$PENDING_DIR/kuroko.apk" || ! chmod 0600 "$PENDING_DIR/kuroko.apk"; then
+                STAGE_OK=0
+            fi
+        fi
+        if [ "$STAGE_OK" -eq 1 ]; then
+            STAGED_SIZE=$(wc -c < "$PENDING_DIR/kuroko.apk" 2>/dev/null | tr -d ' \t\r\n')
+            if [ ! -s "$PENDING_DIR/kuroko.apk" ] || [ -z "$APK_SIZE" ] || [ "$STAGED_SIZE" != "$APK_SIZE" ]; then
+                STAGE_OK=0
+            fi
+        fi
+        if [ "$STAGE_OK" -eq 1 ] && [ -f "$META_FILE" ]; then
+            if ! cp -f "$META_FILE" "$PENDING_DIR/apk_meta.prop" || ! chmod 0600 "$PENDING_DIR/apk_meta.prop" || [ ! -s "$PENDING_DIR/apk_meta.prop" ]; then
+                STAGE_OK=0
+            fi
+        fi
+        if [ "$STAGE_OK" -eq 1 ]; then
+            rm -rf "$APK_DIR"
+            ui_print "$(printf -- "$MSG_APK_DEFERRED_1" "$PM_OUT")"
+            ui_print "$(printf -- "$MSG_APK_DEFERRED_2" "$PENDING_DIR")"
+        else
+            rm -rf "$PENDING_DIR"
+            ui_print "$(printf -- "$MSG_APK_STAGE_FAIL" "$PENDING_DIR" "$APK_FILE")"
+        fi
     fi
 fi
 

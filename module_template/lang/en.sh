@@ -11,6 +11,7 @@ MSG_APK_SIG_WARN_2='! Existing App and saved routes were PRESERVED (not uninstal
 MSG_APK_SIG_WARN_3='! Please back up your routes and install a matching-signature APK manually.'
 MSG_APK_DEFERRED_1='- PackageManager unavailable right now (%s)'
 MSG_APK_DEFERRED_2='- Staged APK to %s; service.sh will install automatically after boot'
+MSG_APK_STAGE_FAIL='! WARNING: Failed to stage APK to %s; original APK kept at %s for manual install'
 MSG_READY='- Ready: bin/kuroko_daemon & zygisk/arm64-v8a.so (%s)'
 MSG_LSPOSED_HINT='- In LSPosed, enable ONLY: System Framework (android), Phone Services (com.android.phone), and optionally Bluetooth (com.android.bluetooth) for BLE'
 MSG_BOOTGUARD_HINT='- Anti-bootloop boot-guard is active (auto-disables after 2 failed boots)'

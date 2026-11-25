@@ -415,7 +415,8 @@
     <string name="diag_check_bt_missing">已有目标应用启用 BLE 策略，但蓝牙钩子未就绪 (B-)。请在 LSPosed 勾选「蓝牙 (com.android.bluetooth)」并重启。</string>
     <string name="diag_check_gms_title">GMS 融合定位钩子（可选）</string>
     <string name="diag_check_gms_ok">GMS 融合定位已就绪（%1$s）</string>
-    <string name="diag_check_gms_disabled">已在射频设置中关闭（GMS 进程零驻留）</string>
+    <string name="diag_check_gms_disabled">已在射频设置中关闭（已确认 GMS 进程零驻留）</string>
+    <string name="diag_check_gms_disabled_pending">已在射频设置中关闭（待重启 GMS 或设备生效，旧 GMS 进程仍驻留钩子）</string>
     <string name="diag_check_gms_not_installed">未检测到运行中的 GMS 进程（可选功能，已跳过）</string>
     <string name="diag_check_gms_warn">检测到 GMS 运行但钩子未激活（%1$s）。请确认 Zygisk Next 排除列表未阻止 com.google.android.gms / .persistent 加载模块。</string>
     <string name="diag_summary_gms">GMS 融合定位: %1$s（%2$s）</string>

@@ -83,6 +83,7 @@ data class DiagnosticSnapshot(
     val gmsDisabledFile: Boolean,
     val gmsStatusFile: String,
     val gmsProcesses: List<String>,
+    val gmsHookPidAlive: Boolean = false,
     val lsposedSensorHook: String,
     val sensorServiceInstances: Int,
     val sensorServiceVmaCount: Int,
@@ -237,6 +238,48 @@ if [ -n "${'$'}GMS_APP_ID" ] && [ "${'$'}GMS_APP_ID" -ge 10000 ]; then
     esac
   done | head -n 8 || true
 fi
+echo "===GMS_RESIDENCY==="
+GMS_HOOK_ALIVE=0
+if [ -r /data/adb/kuroko/gms_status ]; then
+  GMS_ST_PID=""
+  GMS_ST_VAL=""
+  while IFS='=' read -r k v; do
+    case "${'$'}k" in
+      pid) GMS_ST_PID="${'$'}v" ;;
+      status) GMS_ST_VAL="${'$'}v" ;;
+    esac
+  done < /data/adb/kuroko/gms_status 2>/dev/null
+  GMS_ST_PID=$(printf '%s' "${'$'}GMS_ST_PID" | tr -d '\r\n ')
+  GMS_ST_VAL=$(printf '%s' "${'$'}GMS_ST_VAL" | tr -d '\r\n')
+  case "${'$'}GMS_ST_VAL" in
+    ok:*)
+      case "${'$'}GMS_ST_PID" in
+        ''|*[!0-9]*) ;;
+        *)
+          if [ "${'$'}GMS_ST_PID" -gt 0 ] && [ -r "/proc/${'$'}GMS_ST_PID/cmdline" ]; then
+            h_uid_ok=1
+            if [ -n "${'$'}GMS_APP_ID" ] && [ "${'$'}GMS_APP_ID" -ge 10000 ]; then
+              h_uid=$(stat -c %u "/proc/${'$'}GMS_ST_PID" 2>/dev/null)
+              case "${'$'}h_uid" in
+                ''|*[!0-9]*) h_uid_ok=0 ;;
+                *) [ $((h_uid % 100000)) -eq "${'$'}GMS_APP_ID" ] || h_uid_ok=0 ;;
+              esac
+            fi
+            if [ "${'$'}h_uid_ok" -eq 1 ]; then
+              h_cmd=$(tr '\0' ' ' < "/proc/${'$'}GMS_ST_PID/cmdline" 2>/dev/null | sed 's/ .*//')
+              case "${'$'}h_cmd" in
+                com.google.android.gms|com.google.android.gms.persistent)
+                  GMS_HOOK_ALIVE=1
+                  ;;
+              esac
+            fi
+          fi
+          ;;
+      esac
+      ;;
+  esac
+fi
+echo "hook_pid_alive=${'$'}GMS_HOOK_ALIVE"
 echo "===SENSOR_MAPS==="
 set -- $(pidof system_server 2>/dev/null)
 SS_PID="${'$'}1"
@@ -309,11 +352,11 @@ echo "===END==="
 
         val gmsStatusRawLines = sections["GMS_STATUS"].orEmpty().lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
         val gmsDisabledFile = gmsStatusRawLines.any { it == "gms_disabled=1" }
-        val gmsStatusFile = gmsStatusRawLines
-            .filterNot { it.startsWith("gms_disabled=") }
-            .joinToString(" ")
-            .trim()
+        val gmsStatusFile = sanitizeGmsStatusFile(gmsStatusRawLines)
         val gmsProcesses = sanitizeGmsProcs(sections["GMS_PROCS"].orEmpty())
+        val gmsHookPidAlive = sections["GMS_RESIDENCY"].orEmpty()
+            .lineSequence()
+            .any { it.trim() == "hook_pid_alive=1" }
 
         val sensorMapsSanitized = sanitizeSensorMaps(sections["SENSOR_MAPS"].orEmpty())
         val (sensorInstances, sensorVmaCount) = parseSensorMapStats(sensorMapsSanitized)
@@ -369,6 +412,7 @@ echo "===END==="
             gmsDisabledFile = gmsDisabledFile,
             gmsStatusFile = redactBase(gmsStatusFile, cleanKeys),
             gmsProcesses = gmsProcesses,
+            gmsHookPidAlive = gmsHookPidAlive,
             lsposedSensorHook = lsposedSensorHook,
             sensorServiceInstances = sensorInstances,
             sensorServiceVmaCount = sensorVmaCount,
@@ -590,13 +634,24 @@ echo "===END==="
         val gmsShmEffective = connected && st.gmsShm
         val gmsDiagEffective = st.gmsDiag.ifBlank { snapshot.gmsStatusFile }
         val gmsHostRunning = snapshot.gmsProcesses.any { isGmsFlpHostProcess(it) }
+        val gmsPendingRestart = gmsDiagEffective.equals("disabled_pending_restart", ignoreCase = true) ||
+            snapshot.gmsHookPidAlive
         val gmsCheck = when {
-            !gmsEnabledEffective -> HealthCheckItem(
-                id = "gms",
-                title = ctx.getString(R.string.diag_check_gms_title),
-                status = HealthStatus.PASS,
-                detail = ctx.getString(R.string.diag_check_gms_disabled)
-            )
+            !gmsEnabledEffective -> if (gmsPendingRestart) {
+                HealthCheckItem(
+                    id = "gms",
+                    title = ctx.getString(R.string.diag_check_gms_title),
+                    status = HealthStatus.WARN,
+                    detail = ctx.getString(R.string.diag_check_gms_disabled_pending)
+                )
+            } else {
+                HealthCheckItem(
+                    id = "gms",
+                    title = ctx.getString(R.string.diag_check_gms_title),
+                    status = HealthStatus.PASS,
+                    detail = ctx.getString(R.string.diag_check_gms_disabled)
+                )
+            }
             gmsShmEffective -> HealthCheckItem(
                 id = "gms",
                 title = ctx.getString(R.string.diag_check_gms_title),
@@ -706,8 +761,15 @@ echo "===END==="
         val dev = snapshot.deviceInfo
         val aliasMap = if (anonymizePackages) buildPackageAliasMap(snapshot.savedTargets) else emptyMap()
         val gmsEnabledEffective = if (snapshot.daemonSnap.connected) st.gmsEnabled else !snapshot.gmsDisabledFile
-        val gmsDiagEffective = st.gmsDiag.ifBlank { snapshot.gmsStatusFile }.ifBlank { "none" }
+        val gmsPendingRestart = !gmsEnabledEffective &&
+            (st.gmsDiag.equals("disabled_pending_restart", ignoreCase = true) || snapshot.gmsHookPidAlive)
+        val gmsDiagEffective = when {
+            gmsPendingRestart -> "disabled_pending_restart"
+            !gmsEnabledEffective -> "disabled"
+            else -> st.gmsDiag.ifBlank { snapshot.gmsStatusFile }.ifBlank { "none" }
+        }
         val gmsStateLabel = when {
+            gmsPendingRestart -> "OFF(pending)"
             !gmsEnabledEffective -> "OFF"
             snapshot.daemonSnap.connected && st.gmsShm -> "G✓"
             else -> "G-"
@@ -849,6 +911,7 @@ echo "===END==="
                 put("apkInstalledProp", snapshot.apkInstalledProp)
                 put("gmsDisabledFile", snapshot.gmsDisabledFile)
                 put("gmsStatusFile", snapshot.gmsStatusFile)
+                put("gmsHookPidAlive", snapshot.gmsHookPidAlive)
             })
             put("daemon", JSONObject().apply {
                 put("connected", snapshot.daemonSnap.connected)
@@ -992,7 +1055,11 @@ echo "===END==="
             snapshot.daemonSnap.status.sensorDiag.isBlank() &&
             snapshot.lsposedSensorHook.isBlank() &&
             snapshot.sensorServiceMaps.isBlank() &&
-            snapshot.systemLogcat.isBlank()
+            snapshot.systemLogcat.isBlank() &&
+            snapshot.daemonSnap.status.gmsDiag.isBlank() &&
+            snapshot.gmsStatusFile.isBlank() &&
+            !snapshot.gmsHookPidAlive &&
+            snapshot.gmsProcesses.isEmpty()
         ) {
             return ""
         }
@@ -1006,8 +1073,17 @@ echo "===END==="
             sb.appendLine("# lsposed kuroko.sensor.hook: ${snapshot.lsposedSensorHook}")
         }
         val gmsEnabledEff = if (snapshot.daemonSnap.connected) snapshot.daemonSnap.status.gmsEnabled else !snapshot.gmsDisabledFile
-        val gmsDiagEff = snapshot.daemonSnap.status.gmsDiag.ifBlank { snapshot.gmsStatusFile }.ifBlank { "(empty)" }
-        sb.appendLine("# GMS FLP: enabled=$gmsEnabledEff shm=${snapshot.daemonSnap.status.gmsShm} diag=$gmsDiagEff")
+        val gmsPendingRestart = !gmsEnabledEff &&
+            (snapshot.daemonSnap.status.gmsDiag.equals("disabled_pending_restart", ignoreCase = true) || snapshot.gmsHookPidAlive)
+        val gmsDiagEff = when {
+            gmsPendingRestart -> "disabled_pending_restart"
+            !gmsEnabledEff -> "disabled"
+            else -> snapshot.daemonSnap.status.gmsDiag.ifBlank { snapshot.gmsStatusFile }.ifBlank { "(empty)" }
+        }
+        sb.appendLine(
+            "# GMS FLP: enabled=$gmsEnabledEff shm=${snapshot.daemonSnap.status.gmsShm} " +
+                "hookPidAlive=${snapshot.gmsHookPidAlive} diag=$gmsDiagEff"
+        )
         if (snapshot.gmsProcesses.isNotEmpty()) {
             sb.appendLine("# GMS processes: ${snapshot.gmsProcesses.joinToString(", ")}")
         }
@@ -1202,6 +1278,23 @@ echo "===END==="
         }
         val effectiveInstances = if (headerInstances == 0 && vmaCount > 0) 1 else headerInstances
         return effectiveInstances to vmaCount
+    }
+
+    internal fun sanitizeGmsStatusFile(lines: List<String>): String {
+        val explicitStatus = lines.firstOrNull { it.startsWith("status=") }
+            ?.removePrefix("status=")
+            ?.trim()
+        if (!explicitStatus.isNullOrEmpty()) return explicitStatus
+        return lines
+            .filterNot { line ->
+                line.startsWith("gms_disabled=") ||
+                    line.startsWith("pid=") ||
+                    line.startsWith("uid=") ||
+                    line.startsWith("daemon_pid=") ||
+                    line.startsWith("shm_ino=")
+            }
+            .joinToString(" ")
+            .trim()
     }
 
     internal fun isGmsFlpHostProcess(entry: String): Boolean {
