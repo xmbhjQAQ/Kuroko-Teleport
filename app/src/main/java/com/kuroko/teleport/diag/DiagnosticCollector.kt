@@ -105,7 +105,7 @@ data class DiagnosticSnapshot(
  * - Re-verifies strict whitelists in Kotlin for both logcat and LSPosed module logs.
  */
 object DiagnosticCollector {
-    private const val SHELL_TIMEOUT_SECONDS = 6L
+    private const val SHELL_TIMEOUT_SECONDS = 10L
     private const val MAX_STDOUT_BYTES = 1024 * 1024 // 1 MiB hard cap
     private const val CACHE_PRUNE_AGE_MS = 24L * 60L * 60L * 1000L
 
@@ -223,15 +223,17 @@ case "${'$'}GMS_APP_ID" in
   *) GMS_APP_ID=$((GMS_APP_ID % 100000)) ;;
 esac
 if [ -n "${'$'}GMS_APP_ID" ] && [ "${'$'}GMS_APP_ID" -ge 10000 ]; then
-  for pdir in /proc/[0-9]*; do
-    [ -r "${'$'}pdir/cmdline" ] || continue
-    p_uid=$(stat -c %u "${'$'}pdir" 2>/dev/null) || continue
+  GMS_PIDS=$(pidof com.google.android.gms com.google.android.gms.persistent com.google.android.gms.unstable com.google.android.gms.ui 2>/dev/null || true)
+  for pid in ${'$'}GMS_PIDS; do
+    case "${'$'}pid" in ''|*[!0-9]*) continue ;; esac
+    [ -r "/proc/${'$'}pid/cmdline" ] || continue
+    p_uid=$(stat -c %u "/proc/${'$'}pid" 2>/dev/null) || continue
     case "${'$'}p_uid" in ''|*[!0-9]*) continue ;; esac
     [ $((p_uid % 100000)) -eq "${'$'}GMS_APP_ID" ] || continue
-    p_name=$(tr '\0' ' ' < "${'$'}pdir/cmdline" 2>/dev/null | sed 's/ .*//')
+    p_name=$(tr '\0' ' ' < "/proc/${'$'}pid/cmdline" 2>/dev/null | sed 's/ .*//')
     case "${'$'}p_name" in
       com.google.android.gms|com.google.android.gms.*)
-        p_ctx=$(tr -d '\0\r\n' < "${'$'}pdir/attr/current" 2>/dev/null)
+        p_ctx=$(tr -d '\0\r\n' < "/proc/${'$'}pid/attr/current" 2>/dev/null)
         [ -n "${'$'}p_ctx" ] || p_ctx="u:r:unknown:s0"
         echo "${'$'}p_ctx ${'$'}p_name"
         ;;
@@ -657,6 +659,12 @@ echo "===END==="
                 title = ctx.getString(R.string.diag_check_gms_title),
                 status = HealthStatus.PASS,
                 detail = ctx.getString(R.string.diag_check_gms_ok, gmsDiagEffective.ifBlank { "G✓" })
+            )
+            gmsDiagEffective.startsWith("err:", ignoreCase = true) -> HealthCheckItem(
+                id = "gms",
+                title = ctx.getString(R.string.diag_check_gms_title),
+                status = HealthStatus.WARN,
+                detail = ctx.getString(R.string.diag_check_gms_warn, gmsDiagEffective)
             )
             gmsDiagEffective.equals("stale_daemon_restart", ignoreCase = true) -> HealthCheckItem(
                 id = "gms",
