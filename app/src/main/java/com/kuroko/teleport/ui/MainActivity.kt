@@ -145,6 +145,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.kuroko.teleport.R
+import com.kuroko.teleport.diag.AppLogBuffer
 import com.kuroko.teleport.geo.CoordTransform
 import com.kuroko.teleport.geo.GeoPoint
 import com.kuroko.teleport.geo.GeocoderClient
@@ -563,9 +564,9 @@ private fun KurokoControllerScreen() {
         return true
     }
 
-    suspend fun startStaticPoint() {
+    suspend fun startStaticPoint(explicitPoint: GeoPoint? = null) {
         if (!ensureVersionCompatForStart()) return
-        val targetPt = staticPointWgs84 ?: (mapController.getCenterWgs84() ?: centerWgs84)
+        val targetPt = explicitPoint ?: staticPointWgs84 ?: (mapController.getCenterWgs84() ?: centerWgs84)
         staticPointWgs84 = targetPt
         val resolvedTargets = routeStore.resolveActiveTargets(persistIfChanged = true)
         if (resolvedTargets != targetApps) {
@@ -598,6 +599,7 @@ private fun KurokoControllerScreen() {
         val holdRes = daemon.hold()
         KurokoRuntime.refreshNow()
         if (holdRes.isSuccess) {
+            AppLogBuffer.i("Runtime", "Static point hold applied (targets=${resolvedTargets.size})")
             showToast(context.getString(R.string.main_toast_static_started, staticJitterM))
         } else {
             showToast(
@@ -657,6 +659,10 @@ private fun KurokoControllerScreen() {
         val actRes = if (moving) daemon.start() else daemon.hold()
         KurokoRuntime.refreshNow()
         if (actRes.isSuccess) {
+            AppLogBuffer.i(
+                "Runtime",
+                "Dynamic route applied (${pts.size} pts, moving=$moving, loop=$loopEnabled, targets=${resolvedTargets.size})"
+            )
             showToast(
                 context.getString(
                     if (moving) R.string.main_toast_motion_started else R.string.main_toast_holding
@@ -1499,7 +1505,12 @@ private fun KurokoControllerScreen() {
                         val pt = mapController.getCenterWgs84() ?: centerWgs84
                         staticPointWgs84 = pt
                         staticPointLabel = String.format(Locale.US, "%.5f, %.5f", pt.lat, pt.lon)
-                        showToast(context.getString(R.string.main_toast_crosshair_locked))
+                        activePointProfileId = null
+                        if (daemonConnected && daemonStatus.active && !daemonStatus.moving) {
+                            scope.launch { startStaticPoint(pt) }
+                        } else {
+                            showToast(context.getString(R.string.main_toast_crosshair_locked))
+                        }
                     },
                     tone = NeuTone.CORAL,
                     cornerRadius = 14.dp,
