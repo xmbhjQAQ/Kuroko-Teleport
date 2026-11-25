@@ -767,6 +767,70 @@ void binder_pusher_loop() {
     }
 }
 
+/* ===== GMS FLP Live Telemetry Reader ===== */
+void read_gms_status(bool* out_gms_shm_ok, bool* out_gms_enabled, std::string* out_gms_diag) {
+    bool enabled = (access(KUROKO_GMS_DISABLED_PATH, F_OK) != 0);
+    if (out_gms_enabled) *out_gms_enabled = enabled;
+    if (out_gms_shm_ok) *out_gms_shm_ok = false;
+    if (out_gms_diag) out_gms_diag->clear();
+
+    if (!enabled) {
+        if (out_gms_diag) *out_gms_diag = "disabled";
+        return;
+    }
+
+    FILE* fp = std::fopen(KUROKO_GMS_STATUS_PATH, "r");
+    if (!fp) return;
+
+    int32_t pid = 0;
+    std::string status;
+    char line[320];
+    while (std::fgets(line, sizeof(line), fp)) {
+        size_t len = std::strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+            line[--len] = '\0';
+        }
+        if (std::strncmp(line, "pid=", 4) == 0) {
+            pid = static_cast<int32_t>(std::strtol(line + 4, nullptr, 10));
+        } else if (std::strncmp(line, "status=", 7) == 0) {
+            status = std::string(line + 7);
+        }
+    }
+    std::fclose(fp);
+
+    if (pid <= 0 || kill(static_cast<pid_t>(pid), 0) != 0) {
+        if (out_gms_diag) *out_gms_diag = "stale_pid";
+        return;
+    }
+
+    char cmdline_path[64];
+    std::snprintf(cmdline_path, sizeof(cmdline_path), "/proc/%d/cmdline", pid);
+    int cfd = open(cmdline_path, O_RDONLY | O_CLOEXEC);
+    if (cfd < 0) {
+        if (out_gms_diag) *out_gms_diag = "stale_pid";
+        return;
+    }
+    char cmdline[128]{};
+    ssize_t n = read(cfd, cmdline, sizeof(cmdline) - 1);
+    close(cfd);
+    if (n <= 0) {
+        if (out_gms_diag) *out_gms_diag = "stale_pid";
+        return;
+    }
+    cmdline[n] = '\0';
+
+    // Exact match against GMS location process(es); never accept recycled PIDs (e.g. .unstable)
+    bool is_gms_proc = (std::strcmp(cmdline, "com.google.android.gms") == 0 ||
+                        std::strcmp(cmdline, "com.google.android.gms.persistent") == 0);
+    if (!is_gms_proc) {
+        if (out_gms_diag) *out_gms_diag = "stale_pid";
+        return;
+    }
+
+    if (out_gms_diag) *out_gms_diag = status;
+    if (out_gms_shm_ok) *out_gms_shm_ok = (status.rfind("ok:", 0) == 0);
+}
+
 /* ===== Localhost TCP Control Protocol (127.0.0.1:28765) ===== */
 std::string format_status_json() {
     kuroko::SimStatus s = g_engine.get_status();
@@ -775,9 +839,15 @@ std::string format_status_json() {
         std::lock_guard<std::mutex> dlk(g_diag_mu);
         diag_esc = json_escape(g_sensor_diag);
     }
+    bool gms_shm_ok = false;
+    bool gms_enabled = true;
+    std::string gms_diag;
+    read_gms_status(&gms_shm_ok, &gms_enabled, &gms_diag);
+    std::string gms_diag_esc = json_escape(gms_diag);
+
     std::string rf_country_esc = json_escape(s.rf_country);
     std::string rf_serving_esc = json_escape(s.rf_serving);
-    char buf[3072];
+    char buf[4096];
     std::snprintf(
         buf, sizeof(buf),
         "{\"active\":%d,\"moving\":%d,\"loop\":%d,"
@@ -787,6 +857,7 @@ std::string format_status_json() {
         "\"steps\":%llu,\"cadence\":%.1f,\"stride\":%.3f,"
         "\"mode\":%u,\"carry\":%u,\"jitter\":%.2f,\"pace_var\":%.3f,\"targets\":%u,"
         "\"loc_shm\":%d,\"phone_shm\":%d,\"sensor_shm\":%d,\"bt_shm\":%d,\"sensor_diag\":\"%s\","
+        "\"gms_shm\":%s,\"gms_enabled\":%s,\"gms_diag\":\"%s\","
         "\"mod_ver\":\"%s\",\"mod_code\":%d,\"proto_ver\":%d,\"shm_ver\":%d,"
         "\"min_app_code\":%d,\"xposed_code\":%d,\"zygisk_code\":%d,"
         "\"rf_country\":\"%s\",\"rf_mcc\":%u,\"rf_mnc\":%u,"
@@ -802,6 +873,9 @@ std::string format_status_json() {
         g_sensor_shm_ok.load(std::memory_order_relaxed) ? 1 : 0,
         g_bt_shm_ok.load(std::memory_order_relaxed) ? 1 : 0,
         diag_esc.c_str(),
+        gms_shm_ok ? "true" : "false",
+        gms_enabled ? "true" : "false",
+        gms_diag_esc.c_str(),
         KUROKO_MODULE_VERSION_NAME,
         KUROKO_MODULE_VERSION_CODE,
         KUROKO_IPC_PROTOCOL_VERSION,
@@ -1272,6 +1346,42 @@ std::string handle_command(const std::string& line) {
         }
         g_engine.set_rf_beacons(list);
         return "OK SET_RF_BEACONS " + std::to_string(list.size()) + "\n";
+    } else if (cmd == "SET_GMS") {
+        std::string arg, extra;
+        if (!(iss >> arg) || (iss >> extra)) return "ERR BAD_ARGS\n";
+        if (arg == "0") {
+            mkdir("/data/adb/kuroko", 0700);
+            chmod("/data/adb/kuroko", 0700);
+            const char* tmp_path = KUROKO_GMS_DISABLED_PATH ".tmp";
+            int fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+            if (fd < 0) {
+                LOGW("Failed to open %s: %s", tmp_path, strerror(errno));
+                return "ERR IO_FAILED\n";
+            }
+            const char payload[] = "1\n";
+            ssize_t w = write(fd, payload, sizeof(payload) - 1);
+            fchmod(fd, 0600);
+            close(fd);
+            if (w != static_cast<ssize_t>(sizeof(payload) - 1) ||
+                rename(tmp_path, KUROKO_GMS_DISABLED_PATH) != 0) {
+                LOGW("Failed to atomically write %s: %s", KUROKO_GMS_DISABLED_PATH, strerror(errno));
+                unlink(tmp_path);
+                return "ERR IO_FAILED\n";
+            }
+            unlink(KUROKO_GMS_STATUS_PATH);
+            LOGI("GMS FLP disabled via SET_GMS 0");
+            write_daemon_log(false, "gms_flp set=disabled");
+            return "OK GMS_DISABLED\n";
+        } else if (arg == "1") {
+            if (unlink(KUROKO_GMS_DISABLED_PATH) != 0 && errno != ENOENT) {
+                LOGW("Failed to unlink %s: %s", KUROKO_GMS_DISABLED_PATH, strerror(errno));
+                return "ERR IO_FAILED\n";
+            }
+            LOGI("GMS FLP enabled via SET_GMS 1");
+            write_daemon_log(false, "gms_flp set=enabled");
+            return "OK GMS_ENABLED\n";
+        }
+        return "ERR BAD_ARGS\n";
     }
     return "ERR UNKNOWN_CMD\n";
 }

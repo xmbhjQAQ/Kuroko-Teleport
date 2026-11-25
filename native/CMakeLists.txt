@@ -65,10 +65,11 @@ add_executable(kuroko_daemon
 )
 target_link_libraries(kuroko_daemon log dl)
 
-# 2. Zygisk Next arm64-v8a module (loaded ONLY into system_server; dlclosed in all apps)
+# 2. Zygisk Next arm64-v8a module (loaded into system_server & GMS location process; dlclosed in all other apps)
 add_library(kuroko_zygisk SHARED
     zygisk/module.cpp
     zygisk/sensor_hook.cpp
+    zygisk/gms_hook.cpp
 )
 set_target_properties(kuroko_zygisk PROPERTIES OUTPUT_NAME "arm64-v8a" PREFIX "")
-target_link_libraries(kuroko_zygisk log dl)
+target_link_libraries(kuroko_zygisk log)

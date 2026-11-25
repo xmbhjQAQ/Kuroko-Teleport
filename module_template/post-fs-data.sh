@@ -10,6 +10,9 @@ mkdir -p "$STATE_DIR"
 chmod 0700 "$STATE_DIR"
 chown 0:0 "$STATE_DIR" 2>/dev/null
 
+# Clear stale runtime GMS status from previous boot (preserve user's gms_disabled preference)
+rm -f "$STATE_DIR/gms_status"
+
 # Read and increment anti-bootloop boot_guard counter
 COUNT=0
 if [ -f "$GUARD_FILE" ]; then

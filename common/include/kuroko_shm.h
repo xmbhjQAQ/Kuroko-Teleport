@@ -29,6 +29,8 @@
 #define KUROKO_COMPANION_SOCK_PATH  "/dev/kuroko_root.sock"
 #define KUROKO_TOKEN_FILE_PATH      "/data/adb/kuroko/token"
 #define KUROKO_BOOT_GUARD_PATH      "/data/adb/kuroko/boot_guard"
+#define KUROKO_GMS_STATUS_PATH      "/data/adb/kuroko/gms_status"
+#define KUROKO_GMS_DISABLED_PATH    "/data/adb/kuroko/gms_disabled"
 
 /* Global flags */
 #define KUROKO_FLAG_GNSS_SYNTH          (1u << 0)

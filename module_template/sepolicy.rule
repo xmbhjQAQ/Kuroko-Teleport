@@ -1,6 +1,6 @@
-# Allow zygote (preServerSpecialize runs in u:r:zygote:s0 before system_server transition),
-# system_server, radio (com.android.phone), and bluetooth (com.android.bluetooth) to use
-# read-only memfd FDs passed from su/magisk
+# Allow zygote (preServerSpecialize / preAppSpecialize run in u:r:zygote:s0 before domain transition),
+# system_server, radio (com.android.phone), bluetooth (com.android.bluetooth), and
+# gmscore_app (com.google.android.gms / .persistent) to use read-only memfd FDs passed from su/magisk
 allow zygote su fd use
 allow zygote magisk fd use
 allow system_server su fd use
@@ -9,6 +9,8 @@ allow radio su fd use
 allow radio magisk fd use
 allow bluetooth su fd use
 allow bluetooth magisk fd use
+allow gmscore_app su fd use
+allow gmscore_app magisk fd use
 
 # Allow read-only mmap/stat of memfd backing files (tmpfs / su_tmpfs / magisk_tmpfs)
 allow zygote tmpfs file { read getattr map }
@@ -23,6 +25,9 @@ allow radio magisk_tmpfs file { read getattr map }
 allow bluetooth tmpfs file { read getattr map }
 allow bluetooth su_tmpfs file { read getattr map }
 allow bluetooth magisk_tmpfs file { read getattr map }
+allow gmscore_app tmpfs file { read getattr map }
+allow gmscore_app su_tmpfs file { read getattr map }
+allow gmscore_app magisk_tmpfs file { read getattr map }
 
 # Allow root daemon (su/magisk) to transact memfd handoff over Binder to system_server, radio, and bluetooth
 allow su system_server binder { call transfer }
