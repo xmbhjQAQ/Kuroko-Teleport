@@ -1668,18 +1668,47 @@ int32_t handle_bbinder_gms_loc(FnBinderTransact orig, void* self, uint32_t code,
     // Extract embedded BINDER_TYPE_HANDLE callback objects from Parcel without mutating dataPosition
     int32_t handles[16];
     size_t handle_count = 0;
-    const size_t* objs = g_parcel_objects(data);
-    size_t obj_count = g_parcel_objects_count(data);
-    if (objs && obj_count > 0 && obj_count <= 32u) {
-        for (size_t i = 0; i < obj_count && handle_count < 16u; ++i) {
-            size_t off = objs[i];
-            if (off + sizeof(flat_binder_object) > raw_size) continue;
-            flat_binder_object fbo{};
-            std::memcpy(&fbo, raw + off, sizeof(fbo));
-            if (fbo.hdr.type != BINDER_TYPE_HANDLE) continue;
-            int32_t h = static_cast<int32_t>(fbo.handle);
-            if (h > 0) {
-                handles[handle_count++] = h;
+    auto push_unique_handle = [&](int32_t h) {
+        if (h <= 0 || handle_count >= 16u) return;
+        for (size_t k = 0; k < handle_count; ++k) {
+            if (handles[k] == h) return;
+        }
+        handles[handle_count++] = h;
+    };
+
+    size_t obj_count = g_parcel_objects_count ? g_parcel_objects_count(data) : 0;
+    if (obj_count > 0 && obj_count <= 32u) {
+        if (g_parcel_objects) {
+            // Path A: native Parcel::objects() offset table (Android 12-16)
+            const size_t* objs = g_parcel_objects(data);
+            if (objs) {
+                for (size_t i = 0; i < obj_count && handle_count < 16u; ++i) {
+                    size_t off = objs[i];
+                    if (off + sizeof(flat_binder_object) > raw_size) continue;
+                    flat_binder_object fbo{};
+                    std::memcpy(&fbo, raw + off, sizeof(fbo));
+                    if (fbo.hdr.type != BINDER_TYPE_HANDLE) continue;
+                    push_unique_handle(static_cast<int32_t>(fbo.handle));
+                }
+            }
+        } else {
+            // Path B: Android 14-17 fallback when Parcel::objects() is not exported.
+            // Kernel binder_translate_binder() writes hdr.type = BINDER_TYPE_HANDLE,
+            // binder = 0 (high 32 bits == 0), handle = desc, cookie = 0.
+            size_t off = (after_token + 3u) & ~static_cast<size_t>(3u);
+            while (off + sizeof(flat_binder_object) <= raw_size &&
+                   handle_count < 16u && handle_count < obj_count) {
+                flat_binder_object fbo{};
+                std::memcpy(&fbo, raw + off, sizeof(fbo));
+                if (fbo.hdr.type == BINDER_TYPE_HANDLE &&
+                    fbo.cookie == 0u &&
+                    (static_cast<uint64_t>(fbo.binder) >> 32) == 0u &&
+                    fbo.handle > 0u && fbo.handle < 0x1000000u) {
+                    push_unique_handle(static_cast<int32_t>(fbo.handle));
+                    off += sizeof(flat_binder_object);
+                } else {
+                    off += 4u;
+                }
             }
         }
     }
@@ -2014,16 +2043,18 @@ bool install_gms_hooks(JNIEnv* env, const KurokoShm* shm, const std::string& pro
     }
 
     if (!addr_bp_transact || !addr_bb_transact || (!addr_ipc_self && !addr_ipc_self_nn) ||
-        !addr_calling_uid || !addr_p_data || !addr_p_size || !addr_p_objs || !addr_p_objs_cnt ||
+        !addr_calling_uid || !addr_p_data || !addr_p_size || !addr_p_objs_cnt ||
         !addr_ps_self || !addr_ps_proxy) {
         char err_buf[128];
         std::snprintf(err_buf, sizeof(err_buf),
-                      "err:missing_sym:bp=%d,bb=%d,ipc=%d,uid=%d,p=%d,ps=%d",
+                      "err:missing_sym:bp=%d,bb=%d,ipc=%d,uid=%d,pd=%d,psz=%d,pc=%d,ps=%d",
                       addr_bp_transact ? 1 : 0,
                       addr_bb_transact ? 1 : 0,
                       (addr_ipc_self || addr_ipc_self_nn) ? 1 : 0,
                       addr_calling_uid ? 1 : 0,
-                      (addr_p_data && addr_p_size && addr_p_objs && addr_p_objs_cnt) ? 1 : 0,
+                      addr_p_data ? 1 : 0,
+                      addr_p_size ? 1 : 0,
+                      addr_p_objs_cnt ? 1 : 0,
                       (addr_ps_self && addr_ps_proxy) ? 1 : 0);
         set_status(err_buf);
         LOGE("install_gms_hooks(%s): %s", proc_name.c_str(), err_buf);
@@ -2095,8 +2126,9 @@ bool install_gms_hooks(JNIEnv* env, const KurokoShm* shm, const std::string& pro
 
     const char* short_proc = (proc_name == "com.google.android.gms.persistent") ? "gms.persistent" : "gms";
     char ok_buf[128];
-    std::snprintf(ok_buf, sizeof(ok_buf), "ok:vtable:mv=%d,p=%s,bp=%zu,bb=%zu",
-                  KUROKO_MODULE_VERSION_CODE, short_proc, bp_patched, bb_patched);
+    std::snprintf(ok_buf, sizeof(ok_buf), "ok:vtable:mv=%d,p=%s,bp=%zu,bb=%zu,po=%d",
+                  KUROKO_MODULE_VERSION_CODE, short_proc, bp_patched, bb_patched,
+                  g_parcel_objects ? 1 : 0);
     set_status(ok_buf);
     LOGI("install_gms_hooks(%s): installed (%s, decStrong=%d, setData=%d)",
          proc_name.c_str(), ok_buf, addr_dec_strong ? 1 : 0, addr_p_set_data ? 1 : 0);
